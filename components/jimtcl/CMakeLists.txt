@@ -16,7 +16,7 @@ if(${IDF_VERSION_MAJOR} EQUAL 5 AND ${IDF_VERSION_MINOR} EQUAL 0)
 else()
     string(APPEND opts " -D$<JOIN:${compile_definitions}, -D>")
 endif()
-string(APPEND opts " -Wno-implicit-fallthrough -Wno-missing-field-initializers")
+string(APPEND opts " -Wno-implicit-fallthrough -Wno-missing-field-initializers -Wno-maybe-uninitialized")
 string(APPEND opts " -DHAVE_USLEEP=1")
 
 if(NOT CMAKE_BUILD_EARLY_EXPANSION)
@@ -27,7 +27,7 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     ExternalProject_Add(jimtcl_build
         PREFIX ${COMPONENT_DIR}
         SOURCE_DIR ${COMPONENT_DIR}/jimtcl
-        CONFIGURE_COMMAND ./configure --disable-install-jim --with-ext=json --minimal --disable-ssl --host=${host_prefix} "CFLAGS=${opts}"
+        CONFIGURE_COMMAND sh configure --disable-install-jim --with-ext=json --minimal --disable-ssl --host=${host_prefix} --build=x86_64-w64-mingw32 CC_FOR_BUILD=C:/msys64/mingw64/bin/gcc.exe CC=C:/Espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc.exe "CFLAGS=${opts}"
         BUILD_IN_SOURCE 1
         # These two options are set so that Ninja immediately outputs
         # the subproject build to the terminal. Otherwise it looks like the
