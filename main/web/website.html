@@ -1,7 +1,8 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title>OpenOCD on ESP32</title>
+    <meta charset="utf-8">
+    <title>ESP32 无线调试器配置</title>
     <style>
       body {
         margin: 0;
@@ -233,6 +234,19 @@
         cursor: pointer;
       }
 
+      input[type="number"] {
+        width: 72px;
+        padding: 8px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+      }
+
+      .panel-title {
+        text-align: center;
+        font-weight: bold;
+        font-size: 16px;
+        margin: 6px 0;
+      }
     </style>
   </head>
   <body>
@@ -241,41 +255,42 @@
     </header>
 
     <div class="tabs">
-      <div class="tab active" id="wifi-tab" onclick="showTab('wifi-tab')">Wi-Fi Credentials</div>
-      <div class="tab" id="openocd-tab" onclick="showTab('openocd-tab')">OpenOCD Configuration</div>
+      <div class="tab active" id="wifi-tab" onclick="showTab('wifi-tab')">Wi-Fi 设置</div>
+      <div class="tab" id="openocd-tab" onclick="showTab('openocd-tab')">调试配置</div>
+      <div class="tab" id="serial-tab" onclick="showTab('serial-tab')">串口透传</div>
     </div>
 
     <div id="wifi-tab-form" class="form-container">
       <form>
-        <label for="ssid">SSID</label>
+        <label for="ssid">Wi-Fi 名称 (SSID)</label>
         <input type="text" id="ssid" required><br><br>
 
-        <label for="password">Password</label>
+        <label for="password">密码</label>
         <input type="password" id="password" required><br><br>
 
-        <button type="button" onclick="sendCredentials()">Send your local network settings to ESP Debugger</button>
+        <button type="button" onclick="sendCredentials()">发送网络设置到调试器</button>
       </form>
     </div>
 
     <div id="openocd-tab-form" class="form-container">
       <form>
-        <label for="config">Target</label>
+        <label for="config">目标芯片配置文件</label>
         <select id="config" required></select><br><br>
 
         <div class="form-row">
           <div class="form-column">
-            <label for="interface">Interface</label>
+            <label for="interface">调试接口</label>
             <select id="interface" required>
               <option value=0>jtag</option>
               <option value=1>swd</option>
             </select>
           </div>
           <div class="form-column">
-            <label for="rtos">Rtos</label>
+            <label for="rtos">RTOS 支持</label>
             <select id="rtos" required></select>
           </div>
           <div class="form-column">
-            <label for="debug">Debug level</label>
+            <label for="debug">调试日志级别</label>
             <select id="debug" required>
               <option value="1">1</option>
               <option value="2" selected>2</option>
@@ -287,14 +302,14 @@
 
         <div class="panel">
           <div class="form-row">
-            <label for="dual-core">Dual-core</label>
+            <label for="dual-core">双核模式</label>
             <label class="switch">
               <input type="checkbox" id="dual-core" checked>
               <span class="slider"></span>
             </label>
           </div>
           <div class="form-row">
-            <label for="flash-support">Flash support</label>
+            <label for="flash-support">Flash 烧录支持</label>
             <label class="switch">
               <input type="checkbox" id="flash-support" checked>
               <span class="slider"></span>
@@ -302,24 +317,93 @@
           </div>
         </div>
 
-        <label for="c-param">Command line args</label>
+        <label for="c-param">附加命令行参数 (-c)</label>
         <input type="text" id="c-param" required><br><br>
 
-        <button type="button" onclick="sendOpenocdConfig()">Send to ESP Debugger</button>
+        <button type="button" onclick="sendOpenocdConfig()">保存调试配置</button>
       </form>
 
       <form>
         <div class="file-upload">
           <input type="file" id="file-input" accept=".cfg" onchange="handleFileInputChange()">
-          <button type="button" id="upload-button"  class="upload-button" disabled onclick="UploadFile()">Upload a new config file</button>
-          <button type="button" id="delete-button" class="delete-button" onclick="DeleteFile()">Delete a config file</button>
+          <button type="button" id="upload-button"  class="upload-button" disabled onclick="UploadFile()">上传新配置文件</button>
+          <button type="button" id="delete-button" class="delete-button" onclick="DeleteFile()">删除当前配置文件</button>
         </div>
       </form>
 
     </div>
 
+    <div id="serial-tab-form" class="form-container">
+      <form>
+        <div id="serial-status" style="display:none;"></div>
+        <div class="panel">
+          <div class="panel-title">通道 1 · UART1</div>
+          <div class="form-row">
+            <label for="ch0-enable">启用</label>
+            <label class="switch">
+              <input type="checkbox" id="ch0-enable">
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="form-row">
+            <div class="form-column">
+              <label for="ch0-tx">TX 引脚</label>
+              <input type="number" id="ch0-tx" min="0" max="48">
+            </div>
+            <div class="form-column">
+              <label for="ch0-rx">RX 引脚</label>
+              <input type="number" id="ch0-rx" min="0" max="48">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-column">
+              <label for="ch0-baud">波特率</label>
+              <input type="number" id="ch0-baud" min="1200" max="3000000">
+            </div>
+            <div class="form-column">
+              <label for="ch0-port">TCP 端口</label>
+              <input type="number" id="ch0-port" min="1024" max="65535">
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">通道 2 · UART2</div>
+          <div class="form-row">
+            <label for="ch1-enable">启用</label>
+            <label class="switch">
+              <input type="checkbox" id="ch1-enable">
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="form-row">
+            <div class="form-column">
+              <label for="ch1-tx">TX 引脚</label>
+              <input type="number" id="ch1-tx" min="0" max="48">
+            </div>
+            <div class="form-column">
+              <label for="ch1-rx">RX 引脚</label>
+              <input type="number" id="ch1-rx" min="0" max="48">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-column">
+              <label for="ch1-baud">波特率</label>
+              <input type="number" id="ch1-baud" min="1200" max="3000000">
+            </div>
+            <div class="form-column">
+              <label for="ch1-port">TCP 端口</label>
+              <input type="number" id="ch1-port" min="1024" max="65535">
+            </div>
+          </div>
+        </div>
+
+        <button type="button" onclick="saveSerialConfig()">保存串口配置（立即生效）</button>
+      </form>
+    </div>
+
     <footer>
-      <span style="float: right;">&copy; 2023 ChatGPT by OpenAI</span>
+      <span style="float: right;">ESP32 无线调试器 · 配置面板</span>
     </footer>
 
     <script>
@@ -343,7 +427,7 @@
 
           console.log("File name:", fileName);
 
-          var confirmed = confirm("Are you sure you want to delete the config file " + fileName);
+          var confirmed = confirm("确定要删除配置文件 " + fileName + " 吗？");
 
           if (!confirmed) {
             return; // User cancelled the deletion
@@ -382,6 +466,7 @@
 
       // Populate target and rtos list from the server
       getOpenocdConfig();
+      loadSerialConfig();
 
       function getOpenocdConfig() {
         var configDropdown = document.getElementById("config");
@@ -443,7 +528,7 @@
           // Display a warning message
           var warningMessage = document.createElement("div");
           warningMessage.style.color = "red";
-          warningMessage.textContent = "Please enter the SSID.";
+          warningMessage.textContent = "请输入 Wi-Fi 名称 (SSID)。";
           var formContainer = document.getElementById("wifi-tab-form");
           formContainer.appendChild(warningMessage);
 
@@ -518,16 +603,68 @@
       }
 
       function handleConnectionClosed() {
-        showMessage("Error", "The server connection was unexpectedly terminated!");
+        showMessage("错误", "与服务器的连接意外断开！");
       }
 
       function handleErrorResponse(status, responseText) {
-        showMessage(status + " Error!", responseText);
+        showMessage(status + " 错误！", responseText);
       }
 
       function showMessage(title, message) {
         alert(title + "\n" + message);
         location.reload();
+      }
+
+      /* ---------- 串口透传配置 ---------- */
+
+      function fillChannel(i, data) {
+        document.getElementById("ch" + i + "-enable").checked = data.enable;
+        document.getElementById("ch" + i + "-tx").value = data.tx;
+        document.getElementById("ch" + i + "-rx").value = data.rx;
+        document.getElementById("ch" + i + "-baud").value = data.baud;
+        document.getElementById("ch" + i + "-port").value = data.port;
+      }
+
+      function loadSerialConfig() {
+        var xhttp = new XMLHttpRequest();
+        xhttp.onreadystatechange = function () {
+          if (xhttp.readyState == 4 && xhttp.status == 200) {
+            var jsonData = JSON.parse(xhttp.responseText);
+            for (var i = 0; i < jsonData.serial.length; i++) {
+              fillChannel(i, jsonData.serial[i]);
+            }
+          }
+        };
+        xhttp.open("GET", "serial_config", true);
+        xhttp.send();
+      }
+
+      function saveSerialConfig() {
+        var arr = [];
+        for (var i = 0; i < 2; i++) {
+          arr.push({
+            enable: document.getElementById("ch" + i + "-enable").checked,
+            tx:     Number(document.getElementById("ch" + i + "-tx").value),
+            rx:     Number(document.getElementById("ch" + i + "-rx").value),
+            baud:   Number(document.getElementById("ch" + i + "-baud").value),
+            port:   Number(document.getElementById("ch" + i + "-port").value)
+          });
+        }
+        var body = JSON.stringify({serial: arr});
+        var xhttp = new XMLHttpRequest();
+        xhttp.onreadystatechange = function () {
+          if (xhttp.readyState == 4) {
+            if (xhttp.status == 200) {
+              alert("串口配置已保存并生效。");
+            } else {
+              alert("保存失败：\n" + xhttp.responseText);
+            }
+            location.reload();
+          }
+        };
+        xhttp.open("POST", "serial_config", true);
+        xhttp.setRequestHeader("Content-Type", "application/json");
+        xhttp.send(body);
       }
 
     </script>

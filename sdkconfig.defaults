@@ -75,3 +75,8 @@ CONFIG_LV_USE_QRCODE=y
 CONFIG_BSP_LCD_DRAW_BUF_HEIGHT=10
 
 CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+
+# 端口大户：OpenOCD(3333/4444/6666)+httpd+双通道监听常驻 fd 多，
+# 且服务器主动关闭的连接会占 TIME_WAIT 约 120s。默认 10 会耗尽导致
+# accept 失败(ENFILE)，加大留足余量。
+CONFIG_LWIP_MAX_SOCKETS=58

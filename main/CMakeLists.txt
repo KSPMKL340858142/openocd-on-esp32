@@ -1,6 +1,7 @@
 set(sources
     main.c
     storage.c
+    serial_bridge/serial_bridge.c
     network/network.c
     network/network_adapter.c
     network/network_mngr.c
@@ -33,7 +34,7 @@ idf_component_register(
     SRCS
         ${sources}
     INCLUDE_DIRS
-        . network
+        . network serial_bridge
     PRIV_REQUIRES
         ${dependencies}
     EMBED_FILES

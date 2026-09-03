@@ -14,6 +14,7 @@
 #include "storage.h"
 #include "ui.h"
 #include "types.h"
+#include "serial_bridge/serial_bridge.h"
 
 #ifndef MIN
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
@@ -92,7 +93,7 @@ esp_err_t set_credentials_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    httpd_resp_sendstr(req, "Wifi credentials were set successfully");
+    httpd_resp_sendstr(req, "Wi-Fi 设置已保存，设备将自动重启。");
 
     storage_write(WIFI_SSID_KEY, ssid->valuestring, strlen(ssid->valuestring));
     storage_write(WIFI_PASS_KEY, pass->valuestring, strlen(pass->valuestring));
@@ -152,7 +153,7 @@ esp_err_t set_openocd_config_handler(httpd_req_t *req)
     // Cleanup
     cJSON_Delete(root);
 
-    httpd_resp_sendstr(req, "OpenOCD config is set successfully");
+    httpd_resp_sendstr(req, "调试配置已保存，设备将自动重启。");
 
     ui_show_info_screen("OpenOCD parameters have been changed. Restarting in 2 seconds...");
     vTaskDelay(2000 / portTICK_PERIOD_MS);
@@ -283,7 +284,7 @@ static esp_err_t file_upload_handler(httpd_req_t *req)
     storage_update_target_struct();
 
     // Send the response indicating success
-    httpd_resp_sendstr(req, "File uploaded successfully");
+    httpd_resp_sendstr(req, "文件上传成功。");
 
     return ESP_OK;
 }
@@ -314,10 +315,98 @@ static esp_err_t file_delete_handler(httpd_req_t *req)
     storage_update_target_struct();
 
     // Send the response indicating success
-    httpd_resp_sendstr(req, "File deleted successfully");
+    httpd_resp_sendstr(req, "文件删除成功。");
 
     return ESP_OK;
 
+}
+
+/* ---------- 串口透传配置 REST ---------- */
+
+static void channel_to_json(cJSON *arr, int idx, const serial_bridge_channel_cfg_t *c)
+{
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddItemToObject(o, "enable", cJSON_CreateBool(c->enable));
+    cJSON_AddItemToObject(o, "uart",   cJSON_CreateNumber(c->uart_num));
+    cJSON_AddItemToObject(o, "tx",     cJSON_CreateNumber(c->tx_gpio));
+    cJSON_AddItemToObject(o, "rx",     cJSON_CreateNumber(c->rx_gpio));
+    cJSON_AddItemToObject(o, "baud",   cJSON_CreateNumber(c->baud));
+    cJSON_AddItemToObject(o, "port",   cJSON_CreateNumber(c->port));
+    cJSON_AddItemToArray(arr, o);
+}
+
+static esp_err_t get_serial_config_handler(httpd_req_t *req)
+{
+    serial_bridge_cfgs_t cfgs;
+    if (serial_bridge_get_configs(&cfgs) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to read serial config");
+        return ESP_FAIL;
+    }
+    cJSON *arr = cJSON_CreateArray();
+    for (int i = 0; i < SERIAL_BRIDGE_CHANNEL_NUM; i++) {
+        channel_to_json(arr, i, &cfgs.ch[i]);
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddItemToObject(root, "serial", arr);
+    char *s = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t err = httpd_resp_sendstr(req, s);
+    free(s);
+    return err;
+}
+
+static int json_num(cJSON *o, const char *k, int fallback)
+{
+    cJSON *v = cJSON_GetObjectItem(o, k);
+    if (!v || v->type != cJSON_Number) return fallback;
+    return v->valueint;
+}
+
+static bool json_bool(cJSON *o, const char *k, bool fallback)
+{
+    cJSON *v = cJSON_GetObjectItem(o, k);
+    if (!v) return fallback;
+    return cJSON_IsTrue(v);
+}
+
+static esp_err_t set_serial_config_handler(httpd_req_t *req)
+{
+    char json[req->content_len + 1];
+    int ret = httpd_req_recv(req, json, req->content_len);
+    if (ret <= 0) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "read error"); return ESP_FAIL; }
+    json[ret] = 0;
+
+    cJSON *root = cJSON_Parse(json);
+    if (!root) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Json parse error"); return ESP_FAIL; }
+
+    serial_bridge_cfgs_t cfgs;
+    cJSON *arr = cJSON_GetObjectItem(root, "serial");
+    if (!arr || !cJSON_IsArray(arr)) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing serial array");
+        return ESP_FAIL;
+    }
+    for (int i = 0; i < SERIAL_BRIDGE_CHANNEL_NUM; i++) {
+        cJSON *o = cJSON_GetArrayItem(arr, i);
+        if (!o) { cJSON_Delete(root); httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "need 2 channels"); return ESP_FAIL; }
+        serial_bridge_channel_cfg_t *c = &cfgs.ch[i];
+        c->enable    = json_bool(o, "enable", false);
+        c->uart_num  = json_num(o, "uart", i == 0 ? 1 : 2);
+        c->tx_gpio   = json_num(o, "tx", i == 0 ? 4 : 6);
+        c->rx_gpio   = json_num(o, "rx", i == 0 ? 5 : 7);
+        c->baud      = json_num(o, "baud", 115200);
+        c->port      = json_num(o, "port", i == 0 ? 8888 : 8889);
+    }
+    cJSON_Delete(root);
+
+    esp_err_t err = serial_bridge_set_configs(&cfgs);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid serial config");
+        return ESP_FAIL;
+    }
+    httpd_resp_sendstr(req, "Serial config applied");
+    return ESP_OK;
 }
 
 httpd_uri_t uri_get_main_page = {
@@ -376,6 +465,20 @@ httpd_uri_t uri_file_delete = {
     .user_ctx  = NULL
 };
 
+httpd_uri_t uri_get_serial_config = {
+    .uri       = "/serial_config",
+    .method    = HTTP_GET,
+    .handler   = get_serial_config_handler,
+    .user_ctx  = NULL
+};
+
+httpd_uri_t uri_set_serial_config = {
+    .uri       = "/serial_config",
+    .method    = HTTP_POST,
+    .handler   = set_serial_config_handler,
+    .user_ctx  = NULL
+};
+
 esp_err_t web_server_start(httpd_handle_t *http_handle)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
@@ -398,6 +501,8 @@ esp_err_t web_server_start(httpd_handle_t *http_handle)
     httpd_register_uri_handler(*http_handle, &uri_get_openocd_config);
     httpd_register_uri_handler(*http_handle, &uri_file_upload);
     httpd_register_uri_handler(*http_handle, &uri_file_delete);
+    httpd_register_uri_handler(*http_handle, &uri_get_serial_config);
+    httpd_register_uri_handler(*http_handle, &uri_set_serial_config);
 
     return ESP_OK;
 }

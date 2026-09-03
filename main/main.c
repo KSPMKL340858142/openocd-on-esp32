@@ -16,6 +16,7 @@
 #include "web_server.h"
 #include "ui.h"
 #include "openocd.h"
+#include "serial_bridge/serial_bridge.h"
 
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 3, 0)
 #include "driver/uart_vfs.h"
@@ -317,6 +318,8 @@ void app_main(void)
 
         network_get_my_ip(g_app_params.my_ip);
         ui_update_ip_info(g_app_params.my_ip);
+
+        serial_bridge_start();          /* 多路无线串口透传（每个启用通道一个任务，CPU1） */
 
         ui_show_info_screen("OpenOCD has been launched.");
         run_openocd();

@@ -23,3 +23,9 @@ workspace.code-workspace
 sdkconfig
 sdkconfig.old
 
+
+# IDF/构建生成物（勿提交）
+managed_components/
+dependencies.lock
+components/jimtcl/src/
+components/jimtcl/tmp/
