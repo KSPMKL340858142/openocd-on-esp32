@@ -99,6 +99,18 @@ void run_openocd(void)
     argv[argc++] = "-f";
     argv[argc++] = iface;
 
+    /* 用户可配 GPIO 引脚：注入在 interface cfg 之后（此时 esp_gpio driver 已注册，
+     * 覆盖 cfg 内默认 38 39 40 41 / 38 39）。须在 openocd_main 之前保持有效，
+     * 故 gpio_cmd 定义在函数级（与 command 同级）。 */
+    char gpio_cmd[64] = {0};
+    if (g_app_params.interface == '0') {
+        sprintf(gpio_cmd, "esp_gpio_jtag_nums %s", g_app_params.gpio_jtag);
+    } else {
+        sprintf(gpio_cmd, "esp_gpio_swd_nums %s", g_app_params.gpio_swd);
+    }
+    argv[argc++] = "-c";
+    argv[argc++] = gpio_cmd;
+
     char config[64] = {0};
     sprintf(config, "target/%s", g_app_params.config_file);
 
@@ -196,6 +208,27 @@ void load_openocd_params(void)
     }
     ui_update_debug_level_dropdown(g_app_params.debug_level - '0' - 1);
 
+    /* esp_gpio 引脚配置（网页可改，缺省 = cfg 内置值） */
+    read_param = NULL;
+    err = storage_alloc_and_read(OOCD_GPIO_JTAG_KEY, &read_param);
+    if (err == ESP_OK && read_param && strlen(read_param)) {
+        strncpy(g_app_params.gpio_jtag, read_param, sizeof(g_app_params.gpio_jtag) - 1);
+        g_app_params.gpio_jtag[sizeof(g_app_params.gpio_jtag) - 1] = 0;
+    } else {
+        strcpy(g_app_params.gpio_jtag, "38 39 40 41");
+    }
+    free(read_param);
+
+    read_param = NULL;
+    err = storage_alloc_and_read(OOCD_GPIO_SWD_KEY, &read_param);
+    if (err == ESP_OK && read_param && strlen(read_param)) {
+        strncpy(g_app_params.gpio_swd, read_param, sizeof(g_app_params.gpio_swd) - 1);
+        g_app_params.gpio_swd[sizeof(g_app_params.gpio_swd) - 1] = 0;
+    } else {
+        strcpy(g_app_params.gpio_swd, "38 39");
+    }
+    free(read_param);
+
     ESP_LOGI(TAG, "config file (%s)", g_app_params.config_file);
     ESP_LOGI(TAG, "rtos type (%s)", g_app_params.rtos_type);
     ESP_LOGI(TAG, "flash size (%s)", g_app_params.flash_size);
@@ -203,6 +236,7 @@ void load_openocd_params(void)
     ESP_LOGI(TAG, "interface (%s)", g_app_params.interface == '0' ? "jtag" : "swd");
     ESP_LOGI(TAG, "command arg (%s)", g_app_params.command_arg);
     ESP_LOGI(TAG, "debug_level (%c)", g_app_params.debug_level);
+    ESP_LOGI(TAG, "gpio jtag (%s) swd (%s)", g_app_params.gpio_jtag, g_app_params.gpio_swd);
 }
 
 /*

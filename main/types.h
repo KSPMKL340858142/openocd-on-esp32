@@ -27,6 +27,9 @@ typedef struct {
     const char **rtos_list;
     uint8_t rtos_count;
     uint16_t selected_rtos_index;
+    /* esp_gpio 引脚（文本，空格分隔，缺省 38 39 40 41 / 38 39），run_openocd 注入 */
+    char gpio_jtag[32];         /* "tck tms tdi tdo" */
+    char gpio_swd[16];          /* "swclk swdio" */
 } app_params_t;
 
 extern app_params_t g_app_params;

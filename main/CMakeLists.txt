@@ -28,6 +28,7 @@ set(dependencies
     platform_include
     wifi_provisioning
     json
+    esp_timer
 )
 
 idf_component_register(

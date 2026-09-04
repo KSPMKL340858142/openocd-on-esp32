@@ -11,6 +11,7 @@
 
 #include "network_mngr.h"
 #include "ui.h"
+#include "storage.h"
 
 #define WIFI_START_TIMEOUT              3000
 #define WIFI_DISCONNECT_TIMEOUT         3000
@@ -68,6 +69,23 @@ static esp_err_t wait_for_event(const EventBits_t event_bit, const uint32_t time
     return ESP_FAIL;
 }
 
+/* WiFi 省电模式运行时开关：网页可热切换，无需重编译。
+ * 背景（2026-09-04 burst_test 实测）：modem sleep 下高频小包流 RTT 会出现
+ * ~400ms 黑洞（≈ DTIM 204ms 整数倍），示波器波形顿挫；RF 常开后 p95 从 400ms
+ * 降到 ~62ms。代价：空闲多耗 ~60-80mA、模组明显升温。 */
+esp_err_t network_mngr_set_power_save(bool ps_on)
+{
+    wifi_ps_type_t ps = ps_on ? WIFI_PS_MIN_MODEM : WIFI_PS_NONE;
+    esp_err_t err = esp_wifi_set_ps(ps);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "%s: power save %s", __func__,
+                 ps_on ? "ON (modem sleep)" : "OFF (RF always on)");
+    } else {
+        ESP_LOGW(TAG, "%s: esp_wifi_set_ps failed: %s", __func__, esp_err_to_name(err));
+    }
+    return err;
+}
+
 static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
     const wifi_event_t event_type = (wifi_event_t)(event_id);
@@ -82,6 +100,17 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
     case WIFI_EVENT_AP_START:
         ESP_LOGI(TAG, "%s:%d WIFI_EVENT_START", __func__, __LINE__);
         xEventGroupSetBits(s_event_group, WIFI_STARTED_BIT);
+        /* 应用网页配置的省电模式：storage "ps" = '1' 省电 / '0' RF 常开。
+         * 缺省 = 省电开：默认低温低功耗（空闲省 ~60-80mA）；但省电会让高频
+         * 小包流 RTT 出现 ~400ms 黑洞（burst_test 实测），示波器/调试场景需
+         * 在网页 Wi-Fi 设置里手动关闭省电换取低延迟。 */
+        {
+            char psv = '1';
+            if (storage_is_key_exist(WIFI_PS_KEY)) {
+                storage_read(WIFI_PS_KEY, &psv, 1);
+            }
+            network_mngr_set_power_save(psv == '1');
+        }
         break;
     case WIFI_EVENT_STA_STOP:
     case WIFI_EVENT_AP_STOP:

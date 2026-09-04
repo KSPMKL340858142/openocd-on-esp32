@@ -10,10 +10,15 @@
 #define OOCD_INTERFACE_KEY          "interface"
 #define OOCD_CMD_LINE_ARGS_KEY      "command"
 #define OOCD_DBG_LEVEL_KEY          "debug"
+/* OpenOCD esp_gpio 引脚（文本，空格分隔）。缺省 = cfg 内置 38 39 40 41 / 38 39 */
+#define OOCD_GPIO_JTAG_KEY          "gpioj"   /* "tck tms tdi tdo" */
+#define OOCD_GPIO_SWD_KEY           "gpios"   /* "swclk swdio" */
 
 /* Network params */
 #define WIFI_SSID_KEY               "ssid"
 #define WIFI_PASS_KEY               "pass"
+/* WiFi 省电开关：'1'=modem sleep(省电) / '0'或缺失=RF常开(低延迟, 费电升温) */
+#define WIFI_PS_KEY                 "ps"
 
 #define CFG_FILE_PATH               "/data/target/"
 

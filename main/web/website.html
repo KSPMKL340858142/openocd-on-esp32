@@ -269,6 +269,24 @@
         <input type="password" id="password" required><br><br>
 
         <button type="button" onclick="sendCredentials()">发送网络设置到调试器</button>
+
+        <!-- 省电开关：独立功能，与上方 WiFi 凭据无关，切换即生效 -->
+        <div class="panel" style="margin-top:20px;">
+          <div class="panel-title">Wi-Fi 省电模式</div>
+          <div class="form-row">
+            <label>省电模式（modem sleep）</label>
+            <label class="switch">
+              <input type="checkbox" id="wifi-ps" onchange="saveWifiConfig()">
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div style="font-size:12px;color:#888;margin:8px 0;line-height:1.5;">
+            开（省电）：空闲省电降温，但串口小包转发可能延迟至 ~400ms，示波器波形会卡。<br>
+            关（RF 常开）：延迟稳定（实测 p95 62ms），代价空闲多耗 ~60-80mA、模组温热。<br>
+            示波器/调试时建议关闭。切换立即生效并记忆，无需重启。
+          </div>
+          <div id="wifi-ps-status" style="font-size:12px;"></div>
+        </div>
       </form>
     </div>
 
@@ -321,6 +339,38 @@
         <input type="text" id="c-param" required><br><br>
 
         <button type="button" onclick="sendOpenocdConfig()">保存调试配置</button>
+
+        <!-- OpenOCD GPIO 引脚：独立功能，保存后设备自动重启生效 -->
+        <div class="panel" style="margin-top:20px;">
+          <div class="panel-title">JTAG/SWD 引脚配置（esp_gpio）</div>
+          <div class="form-row">
+            <div class="form-column">
+              <label for="gpio-tck">TCK / SWCLK</label>
+              <input type="number" id="gpio-tck" min="0" max="48" value="38">
+            </div>
+            <div class="form-column">
+              <label for="gpio-tms">TMS / SWDIO</label>
+              <input type="number" id="gpio-tms" min="0" max="48" value="39">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-column">
+              <label for="gpio-tdi">TDI（仅 JTAG）</label>
+              <input type="number" id="gpio-tdi" min="0" max="48" value="40">
+            </div>
+            <div class="form-column">
+              <label for="gpio-tdo">TDO（仅 JTAG）</label>
+              <input type="number" id="gpio-tdo" min="0" max="48" value="41">
+            </div>
+          </div>
+          <div style="font-size:12px;color:#888;margin:8px 0;line-height:1.5;">
+            本机作为调试器，通过这些 GPIO 与目标芯片的 JTAG/SWD 相连。<br>
+            保留脚不可用：19/20(USB)、26-37(Flash/PSRAM)、43/44(控制台)。<br>
+            保存后设备自动重启并应用新引脚。
+          </div>
+          <div id="gpio-status" style="font-size:12px;"></div><br>
+          <button type="button" onclick="saveOpenocdGpio()">保存引脚配置（自动重启）</button>
+        </div>
       </form>
 
       <form>
@@ -467,6 +517,94 @@
       // Populate target and rtos list from the server
       getOpenocdConfig();
       loadSerialConfig();
+      loadWifiConfig();
+      loadOpenocdGpio();
+
+      // ---- OpenOCD GPIO 引脚配置 ----
+      function loadOpenocdGpio() {
+        var xhttp = new XMLHttpRequest();
+        xhttp.onreadystatechange = function() {
+          if (xhttp.readyState == 4 && xhttp.status == 200) {
+            try {
+              var d = JSON.parse(xhttp.responseText);
+              // SWD 两线(clk/data)与 JTAG 前两脚物理共用，回填 JTAG 四脚即可
+              document.getElementById("gpio-tck").value = d.jtag[0];
+              document.getElementById("gpio-tms").value = d.jtag[1];
+              document.getElementById("gpio-tdi").value = d.jtag[2];
+              document.getElementById("gpio-tdo").value = d.jtag[3];
+            } catch (e) { }
+          }
+        };
+        xhttp.open("GET", "openocd_gpio", true);
+        xhttp.send();
+      }
+
+      function saveOpenocdGpio() {
+        var st = document.getElementById("gpio-status");
+        var body = JSON.stringify({
+          jtag: [
+            Number(document.getElementById("gpio-tck").value),
+            Number(document.getElementById("gpio-tms").value),
+            Number(document.getElementById("gpio-tdi").value),
+            Number(document.getElementById("gpio-tdo").value)
+          ],
+          swd: [
+            Number(document.getElementById("gpio-tck").value),
+            Number(document.getElementById("gpio-tms").value)
+          ]
+        });
+        var xhttp = new XMLHttpRequest();
+        xhttp.onreadystatechange = function() {
+          if (xhttp.readyState == 4) {
+            st.textContent = xhttp.responseText;
+            if (xhttp.status == 200) {
+              st.style.color = "green";
+              alert("引脚已保存，设备将自动重启并应用新配置。");
+            } else {
+              st.style.color = "red";
+            }
+          }
+        };
+        xhttp.open("POST", "openocd_gpio", true);
+        xhttp.setRequestHeader("Content-Type", "application/json");
+        xhttp.send(body);
+      }
+
+      // ---- WiFi 省电开关 ----
+      function loadWifiConfig() {
+        var xhttp = new XMLHttpRequest();
+        xhttp.onreadystatechange = function() {
+          if (xhttp.readyState == 4 && xhttp.status == 200) {
+            try {
+              var d = JSON.parse(xhttp.responseText);
+              document.getElementById("wifi-ps").checked = d.ps;
+            } catch (e) { }
+          }
+        };
+        xhttp.open("GET", "wifi_config", true);
+        xhttp.send();
+      }
+
+      function saveWifiConfig() {
+        var on = document.getElementById("wifi-ps").checked;
+        var st = document.getElementById("wifi-ps-status");
+        st.textContent = "应用中...";
+        var xhttp = new XMLHttpRequest();
+        xhttp.onreadystatechange = function() {
+          if (xhttp.readyState == 4) {
+            if (xhttp.status == 200) {
+              st.textContent = xhttp.responseText + (on ? "（注意待机温度会升高）" : "（延迟将更稳定）");
+            } else {
+              st.textContent = "保存失败: " + xhttp.responseText;
+              // 回滚勾选状态
+              loadWifiConfig();
+            }
+          }
+        };
+        xhttp.open("POST", "wifi_config", true);
+        xhttp.setRequestHeader("Content-Type", "application/json");
+        xhttp.send(JSON.stringify({ps: on}));
+      }
 
       function getOpenocdConfig() {
         var configDropdown = document.getElementById("config");

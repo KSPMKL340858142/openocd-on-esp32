@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include <sys/stat.h>
 #include <sys/unistd.h>
 
@@ -15,6 +16,7 @@
 #include "ui.h"
 #include "types.h"
 #include "serial_bridge/serial_bridge.h"
+#include "network_mngr.h"
 
 #ifndef MIN
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
@@ -409,6 +411,169 @@ static esp_err_t set_serial_config_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* ------------------------------------------------------------------ */
+/* WiFi 省电开关：GET /wifi_config -> {"ps":bool}
+ *                  POST /wifi_config body {"ps":bool} -> 存储 + 热应用 */
+static bool wifi_ps_current(void)
+{
+    char v = '1';                        /* 缺省 = 省电开（低温低功耗） */
+    if (storage_is_key_exist(WIFI_PS_KEY)) {
+        storage_read(WIFI_PS_KEY, &v, 1);
+    }
+    return v == '1';
+}
+
+static esp_err_t get_wifi_config_handler(httpd_req_t *req)
+{
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ps", wifi_ps_current());
+    char *s = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t err = httpd_resp_sendstr(req, s);
+    free(s);
+    return err;
+}
+
+static esp_err_t set_wifi_config_handler(httpd_req_t *req)
+{
+    char json[req->content_len + 1];
+    int ret = httpd_req_recv(req, json, req->content_len);
+    if (ret <= 0) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "read error"); return ESP_FAIL; }
+    json[ret] = 0;
+
+    cJSON *root = cJSON_Parse(json);
+    if (!root) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Json parse error"); return ESP_FAIL; }
+    cJSON *ps = cJSON_GetObjectItem(root, "ps");
+    bool on = (ps && cJSON_IsTrue(ps)) ? true : false;
+    cJSON_Delete(root);
+
+    char v = on ? '1' : '0';
+    if (storage_write(WIFI_PS_KEY, &v, 1) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "storage write failed");
+        return ESP_FAIL;
+    }
+    network_mngr_set_power_save(on);       /* 热应用，无需重启 */
+    httpd_resp_sendstr(req, on ? "Power save ON (modem sleep)"
+                               : "Power save OFF (RF always on, low latency)");
+    return ESP_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* OpenOCD esp_gpio 引脚配置：GET /openocd_gpio 返回当前引脚，
+ * POST 保存（需重启生效，与调试配置保存行为一致）。 */
+
+/* 保留脚：0-48 范围内排除 UART0 console(43/44)、USB(19/20)、flash/PSRAM(26-37) */
+static bool oocd_gpio_reserved(int gpio)
+{
+    if (gpio < 0 || gpio > 48) return true;
+    if (gpio == 43 || gpio == 44) return true;
+    if (gpio == 19 || gpio == 20) return true;
+    if (gpio >= 26 && gpio <= 37) return true;
+    return false;
+}
+
+/* 从 storage 读引脚文本，解析到 out（cnt 个），失败/缺省用 def */
+static void oocd_gpio_read(const char *key, int *out, int cnt, const int *def)
+{
+    char buf[32] = {0};
+    if (storage_is_key_exist(key)) {
+        storage_read(key, buf, sizeof(buf) - 1);
+    }
+    if (!strlen(buf)) {
+        for (int i = 0; i < cnt; i++) out[i] = def[i];
+        return;
+    }
+    int idx = 0;
+    char *save = NULL;
+    for (char *tok = strtok_r(buf, " ", &save); tok && idx < cnt; tok = strtok_r(NULL, " ", &save)) {
+        out[idx++] = atoi(tok);
+    }
+    /* 数量不足补默认（防手改文件破坏格式） */
+    for (int i = idx; i < cnt; i++) out[i] = def[i];
+}
+
+static esp_err_t get_openocd_gpio_handler(httpd_req_t *req)
+{
+    int jtag[4], swd[2];
+    const int jtag_def[4] = {38, 39, 40, 41};
+    const int swd_def[2] = {38, 39};
+    oocd_gpio_read(OOCD_GPIO_JTAG_KEY, jtag, 4, jtag_def);
+    oocd_gpio_read(OOCD_GPIO_SWD_KEY, swd, 2, swd_def);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON *j = cJSON_CreateIntArray(jtag, 4);
+    cJSON *s = cJSON_CreateIntArray(swd, 2);
+    cJSON_AddItemToObject(root, "jtag", j);
+    cJSON_AddItemToObject(root, "swd", s);
+    char *str = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t err = httpd_resp_sendstr(req, str);
+    free(str);
+    return err;
+}
+
+static esp_err_t set_openocd_gpio_handler(httpd_req_t *req)
+{
+    char json[req->content_len + 1];
+    int ret = httpd_req_recv(req, json, req->content_len);
+    if (ret <= 0) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "read error"); return ESP_FAIL; }
+    json[ret] = 0;
+
+    cJSON *root = cJSON_Parse(json);
+    if (!root) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Json parse error"); return ESP_FAIL; }
+    cJSON *jtag = cJSON_GetObjectItem(root, "jtag");
+    cJSON *swd = cJSON_GetObjectItem(root, "swd");
+    if (!jtag || !cJSON_IsArray(jtag) || cJSON_GetArraySize(jtag) != 4 ||
+        !swd || !cJSON_IsArray(swd) || cJSON_GetArraySize(swd) != 2) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "need jtag[4] and swd[2]");
+        return ESP_FAIL;
+    }
+    /* 校验：范围 0-48 且非保留脚 */
+    for (int i = 0; i < 4; i++) {
+        int g = cJSON_GetArrayItem(jtag, i)->valueint;
+        if (oocd_gpio_reserved(g)) {
+            cJSON_Delete(root);
+            char msg[64];
+            snprintf(msg, sizeof(msg), "GPIO %d invalid or reserved (USB/flash/console)", g);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, msg);
+            return ESP_FAIL;
+        }
+    }
+    for (int i = 0; i < 2; i++) {
+        int g = cJSON_GetArrayItem(swd, i)->valueint;
+        if (oocd_gpio_reserved(g)) {
+            cJSON_Delete(root);
+            char msg[64];
+            snprintf(msg, sizeof(msg), "GPIO %d invalid or reserved (USB/flash/console)", g);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, msg);
+            return ESP_FAIL;
+        }
+    }
+
+    char val[32];
+    snprintf(val, sizeof(val), "%d %d %d %d",
+             cJSON_GetArrayItem(jtag, 0)->valueint, cJSON_GetArrayItem(jtag, 1)->valueint,
+             cJSON_GetArrayItem(jtag, 2)->valueint, cJSON_GetArrayItem(jtag, 3)->valueint);
+    esp_err_t e1 = storage_write(OOCD_GPIO_JTAG_KEY, val, strlen(val));
+    snprintf(val, sizeof(val), "%d %d",
+             cJSON_GetArrayItem(swd, 0)->valueint, cJSON_GetArrayItem(swd, 1)->valueint);
+    esp_err_t e2 = storage_write(OOCD_GPIO_SWD_KEY, val, strlen(val));
+    cJSON_Delete(root);
+    if (e1 != ESP_OK || e2 != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "storage write failed");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_sendstr(req, "GPIO 已保存，设备将自动重启。");
+    ui_show_info_screen("OpenOCD GPIO pins changed. Restarting in 2 seconds...");
+    vTaskDelay(2000 / portTICK_PERIOD_MS);
+    esp_restart();
+    return ESP_OK;
+}
+
 httpd_uri_t uri_get_main_page = {
     .uri = "/",
     .method = HTTP_GET,
@@ -479,6 +644,34 @@ httpd_uri_t uri_set_serial_config = {
     .user_ctx  = NULL
 };
 
+httpd_uri_t uri_get_wifi_config = {
+    .uri       = "/wifi_config",
+    .method    = HTTP_GET,
+    .handler   = get_wifi_config_handler,
+    .user_ctx  = NULL
+};
+
+httpd_uri_t uri_get_openocd_gpio = {
+    .uri       = "/openocd_gpio",
+    .method    = HTTP_GET,
+    .handler   = get_openocd_gpio_handler,
+    .user_ctx  = NULL
+};
+
+httpd_uri_t uri_set_openocd_gpio = {
+    .uri       = "/openocd_gpio",
+    .method    = HTTP_POST,
+    .handler   = set_openocd_gpio_handler,
+    .user_ctx  = NULL
+};
+
+httpd_uri_t uri_set_wifi_config = {
+    .uri       = "/wifi_config",
+    .method    = HTTP_POST,
+    .handler   = set_wifi_config_handler,
+    .user_ctx  = NULL
+};
+
 esp_err_t web_server_start(httpd_handle_t *http_handle)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
@@ -503,6 +696,10 @@ esp_err_t web_server_start(httpd_handle_t *http_handle)
     httpd_register_uri_handler(*http_handle, &uri_file_delete);
     httpd_register_uri_handler(*http_handle, &uri_get_serial_config);
     httpd_register_uri_handler(*http_handle, &uri_set_serial_config);
+    httpd_register_uri_handler(*http_handle, &uri_get_wifi_config);
+    httpd_register_uri_handler(*http_handle, &uri_set_wifi_config);
+    httpd_register_uri_handler(*http_handle, &uri_get_openocd_gpio);
+    httpd_register_uri_handler(*http_handle, &uri_set_openocd_gpio);
 
     return ESP_OK;
 }
