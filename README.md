@@ -116,9 +116,19 @@ The settings for OpenOCD can be configured either through the web page or the to
 
 ## License
 
-The code in this repository is Copyright (c) 2022-2023 Espressif Systems (Shanghai) Co. Ltd., and licensed under Apache 2.0 license, available in [LICENSE](LICENSE) file.
+This repository contains code under multiple licenses:
 
-OpenOCD source code added as a submodule is licensed under GPL v2.0 or later license.
+| Path | License |
+|---|---|
+| `main/` (except `main/openocd/`), `components/` | Apache 2.0 — see [LICENSE](LICENSE) |
+| `main/openocd/` | GPL v2 or later — see [main/openocd/COPYING](main/openocd/COPYING) |
+| `components/jimtcl/jimtcl/` | BSD-style — see its `LICENSE` |
+
+The Apache 2.0 license applies **only** to the code outside `main/openocd/`.
+The OpenOCD sources under `main/openocd/` (including local modifications) remain
+licensed under GPL v2 or later.
+
+See [NOTICE](NOTICE) for the full breakdown.
 
 ## Contributing
 

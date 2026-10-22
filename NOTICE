@@ -1,0 +1,39 @@
+NOTICE
+======
+
+This repository is a fork of espressif/openocd-on-esp32 and contains code
+under several licenses. The Apache 2.0 license in the root LICENSE file
+applies only to the parts listed below as "Apache 2.0".
+
+Component breakdown
+-------------------
+
+  main/ (except main/openocd/), components/ (except bundled third-party code)
+      License: Apache License 2.0
+      Copyright (c) 2022-2023 Espressif Systems (Shanghai) Co. Ltd.
+
+  main/openocd/
+      License: GNU General Public License v2.0 or later
+      See main/openocd/COPYING
+      This directory contains the OpenOCD sources, previously referenced as a
+      git submodule and now vendored directly into this repository. Local
+      modifications under this directory (including src/jtag/drivers/esp_gpio.*
+      and src/rtt/rtt.*) are released under GPL v2 or later.
+
+  main/openocd/src/jtag/drivers/libjaylink/
+      License: GNU General Public License v2.0
+      See the COPYING file in that directory.
+
+  main/openocd/tools/git2cl/
+      License: GNU General Public License v2.0
+      See the COPYING file in that directory.
+
+  main/openocd/jimtcl/ and components/jimtcl/jimtcl/
+      License: BSD-style (see the LICENSE file in each directory)
+
+Distribution notes
+------------------
+
+Because this repository contains GPL v2 or later code, distributing a binary
+that includes OpenOCD requires making the corresponding source available under
+the GPL. The Apache 2.0 licensed parts remain under Apache 2.0.
