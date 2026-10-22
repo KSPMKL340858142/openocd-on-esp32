@@ -1,6 +1,0 @@
-[submodule "main/openocd"]
-	path = main/openocd
-	url = ../openocd-esp32.git
-[submodule "components/jimtcl/jimtcl"]
-	path = components/jimtcl/jimtcl
-	url = https://github.com/msteveb/jimtcl.git

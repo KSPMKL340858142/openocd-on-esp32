@@ -29,3 +29,8 @@ managed_components/
 dependencies.lock
 components/jimtcl/src/
 components/jimtcl/tmp/
+
+# 子模块源码转为普通目录后，排除其中的编译中间产物
+*.o
+*.d
+.deps/
