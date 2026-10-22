@@ -114,6 +114,33 @@ By default, the ESP-BOX and UI functionality are disabled but can be enabled fro
 
 The settings for OpenOCD can be configured either through the web page or the touch screen on the ESP-BOX. By default, only the configurations for Espressif chips are preloaded into the file system. However, it is also possible to use other chip configuration files by directly uploading them from the web page.
 
+## Local modifications vs upstream
+
+This fork differs from `espressif/openocd-on-esp32` in **24 files, +1779 / −101 lines**.
+
+### Application (relative to upstream `master`)
+
+| File | +/− | Purpose |
+|---|---|---|
+| `main/serial_bridge/serial_bridge.{c,h}` | +433 | 双路无线串口透传、热重配、socket 泄漏修复 |
+| `main/network/web_server.c` | +306 / −4 | 网页配置接口（GPIO / WiFi 省电 / 串口桥）|
+| `main/web/website.html` | +296 / −21 | 网页界面（含汉化）|
+| `main/main.c` | +37 | 初始化串口桥与网络 |
+| `main/network/network_mngr.{c,h}` | +37 | WiFi 省电开关 |
+| `main/CMakeLists.txt`、`sdkconfig.defaults` 等 | +20 | 构建配置 |
+| `NOTICE`、`README.md`、`.gitignore` | +62 | 许可证与文档 |
+
+### OpenOCD (relative to the former submodule commit `3f97c8fa1`)
+
+| File | +/− | Purpose |
+|---|---|---|
+| `src/jtag/drivers/esp_gpio.{c,h}` | +358 / −63 | SWD 速率可调、非专用 GPIO 访问 |
+| `src/target/arm_adi_v5.c` | +108 | DAP 读取路径调整 |
+| `src/rtt/rtt.{c,h}` | +71 | `rtt_discard_channel_data()`，轮询容差 |
+| `src/server/rtt_server.c` | +9 | RTT server 配合 |
+| `tcl/target/ti_mspm0.cfg` | +37 | MSPM0 目标支持 |
+| `tcl/target/stm32f1x.cfg` | +7 / −2 | F1 的 RTT 自启动 |
+
 ## License
 
 This repository contains code under multiple licenses:
