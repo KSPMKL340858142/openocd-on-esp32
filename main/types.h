@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdint.h>
+
 #define WIFI_SSID_LEN          32
 #define WIFI_PASS_LEN          64
 

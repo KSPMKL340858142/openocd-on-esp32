@@ -29,6 +29,6 @@ esp_err_t storage_erase_key(const char *key);
 size_t storage_get_value_length(const char *key);
 bool storage_is_key_exist(const char *key);
 esp_err_t storage_erase_all(void);
-esp_err_t storage_alloc_and_read(char *key, char **value);
+esp_err_t storage_alloc_and_read(const char *key, char **value);
 esp_err_t storage_update_target_struct(void);
 esp_err_t storage_update_rtos_struct(void);

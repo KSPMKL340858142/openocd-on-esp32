@@ -186,7 +186,7 @@
         transform: translateX(20px);
       }
 
-      .file-upload input[type="file"]::-webkit-file-upload-button {
+      .card input[type="file"]::-webkit-file-upload-button {
         padding: 10px 20px;
         background-color: #344562;
         color: #fff;
@@ -196,7 +196,7 @@
         transition: background-color 0.3s;
       }
 
-      .file-upload input[type="file"]::-webkit-file-upload-button:hover {
+      .card input[type="file"]::-webkit-file-upload-button:hover {
         background-color: #243b55;
       }
 
@@ -247,6 +247,126 @@
         font-size: 16px;
         margin: 6px 0;
       }
+
+      /* ---- 平铺布局：宽屏并排成卡片，窄屏自动堆叠 ----
+         auto-fit + minmax 让列数随窗口变化，不用写媒体查询 */
+      .panel-grid {
+        display: grid;
+        /* 400px 起步：1440 容器下正好 3 列（4 列要到 1600+），卡片不会再挤 */
+        grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+        gap: 18px;
+        max-width: 1440px;
+        margin: 0 auto;
+        padding: 0 16px 40px;
+        align-items: stretch;          /* 同一行的卡片等高，底部才对得齐 */
+      }
+
+      .card {
+        display: flex;
+        flex-direction: column;
+        box-sizing: border-box;
+        background-color: #f4f4f4;
+        border: 1px solid #e0e0e0;
+        border-radius: 6px;
+        padding: 16px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, .06);
+      }
+
+      /* 卡片标题：左对齐 + 下划线，和正文标签拉开层级 */
+      .card .panel-title {
+        text-align: left;
+        font-size: 14px;
+        font-weight: 700;
+        color: #243b55;
+        border-bottom: 1px solid #e2e2e2;
+        padding-bottom: 8px;
+        margin: 0 0 12px;
+      }
+
+      /* 卡片内标签统一成「小号灰字、左对齐」，跟着输入框走。
+         :not(.switch) 是为了不破坏开关控件本身的行内布局。 */
+      .card label:not(.switch) {
+        display: block;
+        text-align: left;
+        font-size: 12px;
+        font-weight: normal;
+        color: #666;
+        margin-bottom: 6px;
+      }
+
+      /* 开关行里的 label 是 flex 子项，靠 align-items 居中即可，
+         再带 margin-bottom 会把文字顶偏 */
+      .card .form-row > label:not(.switch) {
+        margin-bottom: 0;
+      }
+
+      .card .hint {
+        font-size: 12px;
+        color: #7a7a7a;
+        line-height: 1.6;
+        margin: 4px 0 10px;
+      }
+
+      .card .hint b {
+        color: #555;
+      }
+
+      /* 卡片里的输入控件一律占满列宽，避免出现「框窄、标签居中」的错位感 */
+      .card input[type="text"],
+      .card input[type="number"],
+      .card select,
+      .card input[type="file"] {
+        width: 100%;
+        box-sizing: border-box;
+      }
+
+      .card input[type="file"] {
+        font-size: 12px;
+      }
+
+      .card button,
+      .card .upload-button,
+      .card .delete-button {
+        width: 100%;
+        margin: 12px 0 0;
+        box-sizing: border-box;
+      }
+
+      /* 按钮贴底：只对「按钮正好是卡片最后一个元素」的卡片生效。
+         用 :last-child 而不是 :last-of-type——合并后的「文件与配置」卡片
+         末尾是状态行，若按类型匹配会把中间的下载按钮推到最下面打乱顺序。 */
+      .card > button:last-child {
+        margin-top: auto;
+      }
+
+      /* 卡片内部的分段线 */
+      .card-divider {
+        border: none;
+        border-top: 1px solid #e2e2e2;
+        margin: 16px 0 14px;
+      }
+
+      /* 卡片内嵌套的 .panel 去掉了边框和内边距，必须自己补上外边距，
+         否则紧贴上一个控件（RTOS 下拉框 → 双核开关那一处就贴死了） */
+      .card .panel {
+        border: none;
+        padding: 0;
+        margin: 10px 0 12px;
+      }
+
+      .card .form-row {
+        margin-bottom: 10px;
+      }
+
+      .card .form-column {
+        flex: 1;
+        min-width: 0;                  /* 否则 select 的长选项会撑破列宽 */
+        margin-right: 10px;
+      }
+
+      .card .form-column:last-child {
+        margin-right: 0;
+      }
     </style>
   </head>
   <body>
@@ -291,58 +411,64 @@
     </div>
 
     <div id="openocd-tab-form" class="form-container">
-      <form>
-        <label for="config">目标芯片配置文件</label>
-        <select id="config" required></select><br><br>
+      <div class="panel-grid">
 
-        <div class="form-row">
-          <div class="form-column">
-            <label for="interface">调试接口</label>
-            <select id="interface" required>
-              <option value=0>jtag</option>
-              <option value=1>swd</option>
-            </select>
+        <!-- 1. 调试参数 -->
+        <div class="card">
+          <div class="panel-title">调试参数</div>
+
+          <label for="config">目标芯片配置文件</label>
+          <select id="config" required></select>
+
+          <div class="form-row" style="margin-top:10px;">
+            <div class="form-column">
+              <label for="interface">调试接口</label>
+              <select id="interface" required>
+                <option value=0>jtag</option>
+                <option value=1>swd</option>
+              </select>
+            </div>
+            <div class="form-column">
+              <label for="debug">日志级别</label>
+              <select id="debug" required>
+                <option value="1">1</option>
+                <option value="2" selected>2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+              </select>
+            </div>
           </div>
-          <div class="form-column">
-            <label for="rtos">RTOS 支持</label>
-            <select id="rtos" required></select>
+
+          <label for="rtos">RTOS 支持</label>
+          <select id="rtos" required></select>
+
+          <div class="panel">
+            <div class="form-row">
+              <label for="dual-core">双核模式</label>
+              <label class="switch">
+                <input type="checkbox" id="dual-core" checked>
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="form-row">
+              <label for="flash-support">Flash 烧录支持</label>
+              <label class="switch">
+                <input type="checkbox" id="flash-support" checked>
+                <span class="slider"></span>
+              </label>
+            </div>
           </div>
-          <div class="form-column">
-            <label for="debug">调试日志级别</label>
-            <select id="debug" required>
-              <option value="1">1</option>
-              <option value="2" selected>2</option>
-              <option value="3">3</option>
-              <option value="4">4</option>
-            </select>
-          </div>
+
+          <label for="c-param">附加命令行参数 (-c)</label>
+          <input type="text" id="c-param" required>
+
+          <button type="button" onclick="sendOpenocdConfig()">保存调试配置</button>
         </div>
 
-        <div class="panel">
-          <div class="form-row">
-            <label for="dual-core">双核模式</label>
-            <label class="switch">
-              <input type="checkbox" id="dual-core" checked>
-              <span class="slider"></span>
-            </label>
-          </div>
-          <div class="form-row">
-            <label for="flash-support">Flash 烧录支持</label>
-            <label class="switch">
-              <input type="checkbox" id="flash-support" checked>
-              <span class="slider"></span>
-            </label>
-          </div>
-        </div>
+        <!-- 2. 引脚 -->
+        <div class="card">
+          <div class="panel-title">JTAG/SWD 引脚（esp_gpio）</div>
 
-        <label for="c-param">附加命令行参数 (-c)</label>
-        <input type="text" id="c-param" required><br><br>
-
-        <button type="button" onclick="sendOpenocdConfig()">保存调试配置</button>
-
-        <!-- OpenOCD GPIO 引脚：独立功能，保存后设备自动重启生效 -->
-        <div class="panel" style="margin-top:20px;">
-          <div class="panel-title">JTAG/SWD 引脚配置（esp_gpio）</div>
           <div class="form-row">
             <div class="form-column">
               <label for="gpio-tck">TCK / SWCLK</label>
@@ -363,24 +489,49 @@
               <input type="number" id="gpio-tdo" min="0" max="48" value="41">
             </div>
           </div>
-          <div style="font-size:12px;color:#888;margin:8px 0;line-height:1.5;">
-            本机作为调试器，通过这些 GPIO 与目标芯片的 JTAG/SWD 相连。<br>
-            保留脚不可用：19/20(USB)、26-37(Flash/PSRAM)、43/44(控制台)。<br>
-            保存后设备自动重启并应用新引脚。
+
+          <div class="hint">
+            接目标芯片的 SWD/JTAG 连线。<br>
+            不可用：19-20(USB)、26-37(Flash/PSRAM)、43-44(控制台)。<br>
+            保存后自动重启。
           </div>
-          <div id="gpio-status" style="font-size:12px;"></div><br>
+          <div id="gpio-status" style="font-size:12px;"></div>
+
           <button type="button" onclick="saveOpenocdGpio()">保存引脚配置（自动重启）</button>
         </div>
-      </form>
 
-      <form>
-        <div class="file-upload">
+        <!-- 3. 文件与配置：cfg 脚本 + 整机配置导入导出（合成一张卡，避免一行四列太挤） -->
+        <div class="card">
+          <div class="panel-title">文件与配置</div>
+
+          <label>目标芯片 cfg 脚本</label>
+          <div class="hint">
+            OpenOCD 的 <b>target 配置文件</b>（.cfg，如 ti_mspm0.cfg）：
+            芯片 SRAM 地址、Flash 算法、复位方式。<b>不是调试参数。</b><br>
+            上传后要回「调试参数」卡片选中它才生效。
+          </div>
+
           <input type="file" id="file-input" accept=".cfg" onchange="handleFileInputChange()">
-          <button type="button" id="upload-button"  class="upload-button" disabled onclick="UploadFile()">上传新配置文件</button>
-          <button type="button" id="delete-button" class="delete-button" onclick="DeleteFile()">删除当前配置文件</button>
-        </div>
-      </form>
+          <button type="button" id="upload-button" class="upload-button" disabled onclick="UploadFile()">上传 cfg 脚本</button>
+          <button type="button" id="delete-button" class="delete-button" onclick="DeleteFile()">删除选中的 cfg 脚本</button>
 
+          <hr class="card-divider">
+
+          <label>整机配置 config.json</label>
+          <div class="hint">
+            <b>全部运行配置</b>合成一个 JSON：Wi-Fi、调试参数、引脚、RTT 轮询、串口桥。
+            在电脑上改好传回来即可。<br>
+            <b>导入后自动重启并应用。</b>
+          </div>
+
+          <button type="button" onclick="downloadConfig()">下载 config.json</button>
+          <input type="file" id="config-file-input" accept=".json,application/json"
+                 onchange="uploadConfig()" style="margin-top:10px;">
+
+          <div id="config-status" style="font-size:12px;margin-top:8px;"></div>
+        </div>
+
+      </div>
     </div>
 
     <div id="serial-tab-form" class="form-container">
@@ -475,9 +626,16 @@
       function DeleteFile() {
           var fileName = document.getElementById("config").value;
 
+          // 下拉框为空时别发 /delete/（后端会当成「缺文件名」直接拒，前端先拦一下更友好）
+          if (!fileName) {
+            alert("「调试参数」里的目标芯片配置文件下拉框是空的，没有可删除的项。");
+            return;
+          }
+
           console.log("File name:", fileName);
 
-          var confirmed = confirm("确定要删除配置文件 " + fileName + " 吗？");
+          var confirmed = confirm("确定要删除 cfg 脚本 " + fileName + " 吗？\n"
+            + "如果它正是当前在用的，会自动切到列表里的第一个。");
 
           if (!confirmed) {
             return; // User cancelled the deletion
@@ -632,6 +790,27 @@
         xhttp.send();
       }
 
+      // 给 select 设当前值；选项里没有就先补一个（比如当前 target 文件
+      // 已经被删掉了，也不该把下拉框留空导致看不出实际在用哪个）
+      function setSelectValue(sel, val) {
+        if (val === undefined || val === null) {
+          return;
+        }
+        var found = false;
+        for (var i = 0; i < sel.options.length; i++) {
+          if (sel.options[i].value === val || sel.options[i].text === val) {
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          var option = document.createElement("option");
+          option.text = val;
+          sel.add(option);
+        }
+        sel.value = val;
+      }
+
       function populateDropdowns(jsonData) {
         // Get the config and rtos dropdown elements
         var configDropdown = document.getElementById("config");
@@ -653,6 +832,20 @@
           var option = document.createElement("option");
           option.text = jsonData.rtosList[i];
           rtosDropdown.add(option);
+        }
+
+        // 回填当前生效值。不做这一步，网页显示的就是 HTML 里写死的默认值
+        // （debug=2、dual-core/flash 默认勾选、interface 默认 jtag），
+        // 跟设备实际在用的配置对不上。
+        var cur = jsonData.current;
+        if (cur) {
+          setSelectValue(configDropdown, cur.target);
+          setSelectValue(rtosDropdown, cur.rtos);
+          setSelectValue(document.getElementById("interface"), cur.interface);
+          setSelectValue(document.getElementById("debug"), cur.debug);
+          document.getElementById("dual-core").checked = !!cur.dualCore;
+          document.getElementById("flash-support").checked = !!cur.flash;
+          document.getElementById("c-param").value = cur.cParam || "";
         }
       }
 
@@ -803,6 +996,47 @@
         xhttp.open("POST", "serial_config", true);
         xhttp.setRequestHeader("Content-Type", "application/json");
         xhttp.send(body);
+      }
+
+      // ---- 整机配置（config.json）导入导出 ----
+      function downloadConfig() {
+        // 后端对这个地址设了 Content-Disposition: attachment，浏览器会直接当文件下载
+        window.location.href = "config.json";
+      }
+
+      function uploadConfig() {
+        var input = document.getElementById("config-file-input");
+        var st = document.getElementById("config-status");
+        if (!input.files.length) {
+          return;
+        }
+
+        var file = input.files[0];
+        st.style.color = "#555";
+        st.textContent = "正在上传 " + file.name + " ...";
+
+        var reader = new FileReader();
+        reader.onload = function () {
+          var xhttp = new XMLHttpRequest();
+          xhttp.onreadystatechange = function () {
+            if (xhttp.readyState == 4) {
+              if (xhttp.status == 200) {
+                st.style.color = "green";
+                st.textContent = xhttp.responseText + "（页面 6 秒后自动刷新）";
+                // 后端回完响应就重启，等它起来再刷新，否则刷出来还是旧值
+                setTimeout(function () { location.reload(); }, 6000);
+              } else {
+                st.style.color = "red";
+                st.textContent = "导入失败：" + xhttp.responseText;
+              }
+              input.value = "";
+            }
+          };
+          xhttp.open("POST", "config.json", true);
+          xhttp.setRequestHeader("Content-Type", "application/json");
+          xhttp.send(reader.result);
+        };
+        reader.readAsText(file);
       }
 
     </script>

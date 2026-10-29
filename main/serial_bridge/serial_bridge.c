@@ -23,10 +23,9 @@
 #include "esp_log.h"
 
 #include "serial_bridge.h"
-#include "storage.h"
+#include "app_config.h"
 
 #define TAG              "serial-bridge"
-#define NVS_KEY          "serbridge"
 #define RX_BUF_SZ        4096
 #define TX_BUF_SZ        2048
 #define TASK_STACK       4096
@@ -332,16 +331,9 @@ static void channel_start(channel_rt_t *rt)
 
 static void cfgs_load(void)
 {
-    memcpy(&s_cfgs, &s_defaults, sizeof(s_cfgs));
-    if (storage_is_key_exist(NVS_KEY)) {           /* 首次启动无配置时保持默认值 */
-        size_t len = storage_get_value_length(NVS_KEY);
-        if (len == sizeof(s_cfgs)) {
-            char buf[sizeof(s_cfgs)];
-            if (storage_read(NVS_KEY, buf, sizeof(buf)) == ESP_OK) {
-                memcpy(&s_cfgs, buf, sizeof(s_cfgs));
-            }
-        }
-    }
+    /* 配置的唯一来源是 app_config（NVS 里那份 JSON）。
+     * app_config_load() 已在 app_main 里、本函数之前跑过, 这里直接取内存镜像。 */
+    memcpy(&s_cfgs, &app_config_get()->serial, sizeof(s_cfgs));
     for (int i = 0; i < SERIAL_BRIDGE_CHANNEL_NUM; i++) {
         s_ch[i].cfg = s_cfgs.ch[i];
     }
@@ -363,13 +355,32 @@ esp_err_t serial_bridge_get_configs(serial_bridge_cfgs_t *out)
     return ESP_OK;
 }
 
+void serial_bridge_default_configs(serial_bridge_cfgs_t *out)
+{
+    if (!out) {
+        return;
+    }
+    memcpy(out, &s_defaults, sizeof(*out));
+}
+
+esp_err_t serial_bridge_validate(const serial_bridge_cfgs_t *cfgs)
+{
+    if (!cfgs) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return cfgs_validate(cfgs);
+}
+
 esp_err_t serial_bridge_set_configs(const serial_bridge_cfgs_t *cfg)
 {
     esp_err_t e = cfgs_validate(cfg);
     if (e != ESP_OK) return e;
 
-    if (storage_write(NVS_KEY, (const char *)cfg, sizeof(*cfg)) != ESP_OK) {
-        ESP_LOGE(TAG, "NVS write failed");
+    /* 写回 app_config（整份 JSON）而不是原来的独立二进制 blob:
+     * 串口桥不再是独立的真相源, 导出 config 时能一并带出去。 */
+    memcpy(&app_config_mutable()->serial, cfg, sizeof(*cfg));
+    if (app_config_save() != ESP_OK) {
+        ESP_LOGE(TAG, "config save failed");
         return ESP_FAIL;
     }
 

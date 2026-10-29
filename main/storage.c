@@ -99,7 +99,9 @@ esp_err_t storage_read(const char *key, char *value, size_t len)
     size_t n_bytes = len;
 
     esp_err = nvs_get_blob(my_handle, key, value, &n_bytes);
-    if (esp_err != ESP_OK) {
+    /* NOT_FOUND = 这个 key 还没存过（首次上电），属于正常情况，不该刷红字。
+     * 否则每次首次启动都会在日志里看到一条假故障。 */
+    if (esp_err != ESP_OK && esp_err != ESP_ERR_NVS_NOT_FOUND) {
         ESP_LOGE(TAG, "Failed to get blob (%s)-(%s)", key, esp_err_to_name(esp_err));
     }
 
@@ -163,7 +165,7 @@ size_t storage_get_value_length(const char *key)
     size_t length = 0;
 
     esp_err = nvs_get_blob(nvs, key, NULL, &length);
-    if (esp_err != ESP_OK) {
+    if (esp_err != ESP_OK && esp_err != ESP_ERR_NVS_NOT_FOUND) {
         ESP_LOGE(TAG, "Failed to get blob (%s)-(%s)", key, esp_err_to_name(esp_err));
     }
 
@@ -194,7 +196,7 @@ esp_err_t storage_erase_all(void)
     return ESP_OK;
 }
 
-esp_err_t storage_alloc_and_read(char *key, char **value)
+esp_err_t storage_alloc_and_read(const char *key, char **value)
 {
     if (!key) {
         return ESP_ERR_INVALID_ARG;

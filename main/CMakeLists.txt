@@ -1,5 +1,6 @@
 set(sources
     main.c
+    app_config.c
     storage.c
     serial_bridge/serial_bridge.c
     network/network.c

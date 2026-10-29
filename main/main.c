@@ -11,6 +11,7 @@
 #include "driver/uart.h"
 
 #include "types.h"
+#include "app_config.h"
 #include "storage.h"
 #include "network.h"
 #include "web_server.h"
@@ -126,6 +127,16 @@ void run_openocd(void)
         argv[argc++] = g_app_params.command_arg;
     }
 
+    /* RTT 上行轮询间隔：cfg 侧写成 if {[info exists RTT_POLL_MS]} {
+     * rtt polling_interval $RTT_POLL_MS }，所以必须在 -f target/xxx.cfg
+     * 之前注入，否则 cfg 执行时还看不到这个变量。
+     * 轮询间隔决定了 RTT 上行速率的配置上限
+     * （min(目标缓冲, 1024) ÷ 轮询间隔），是唯一不用重编就能调的旋钮。 */
+    char rtt_cmd[48] = {0};
+    snprintf(rtt_cmd, sizeof(rtt_cmd), "set RTT_POLL_MS %d", app_config_get()->rtt_poll_ms);
+    argv[argc++] = "-c";
+    argv[argc++] = rtt_cmd;
+
     /* target config must be set after extra commands */
     argv[argc++] = "-f";
     argv[argc++] = config;
@@ -144,90 +155,29 @@ void run_openocd(void)
 
 void load_openocd_params(void)
 {
-    char *read_param = NULL;
+    /* 全部取自统一配置（NVS 里那份 JSON）。这里的指针指向 app_config 内部的
+     * 静态字段、生命周期贯穿整个程序，所以不再需要原来的堆分配（那些内存
+     * 分配后从不释放，属于泄漏式写法）。 */
+    const app_config_t *c = app_config_get();
 
-    esp_err_t err = storage_alloc_and_read(OOCD_CFG_FILE_KEY, &read_param);
-    if (err != ESP_OK || !read_param) {
-        g_app_params.config_file = CONFIG_OPENOCD_TARGET_CONFIG_FILE;
-    } else {
-        g_app_params.config_file = read_param;
-    }
+    g_app_params.config_file = c->target;
+    g_app_params.interface   = c->iface;
+    g_app_params.rtos_type   = c->rtos;
+    g_app_params.flash_size  = c->flash_size;
+    g_app_params.dual_core   = c->dual_core;
+    g_app_params.debug_level = c->debug_level;
+    g_app_params.command_arg = c->extra_command;
 
-    err = storage_read(OOCD_INTERFACE_KEY, &g_app_params.interface, 1);
-    if (err != ESP_OK) {
-        g_app_params.interface = CONFIG_OPENOCD_INTERFACE + '0';
-    }
+    strncpy(g_app_params.gpio_jtag, c->gpio_jtag, sizeof(g_app_params.gpio_jtag) - 1);
+    g_app_params.gpio_jtag[sizeof(g_app_params.gpio_jtag) - 1] = 0;
+    strncpy(g_app_params.gpio_swd, c->gpio_swd, sizeof(g_app_params.gpio_swd) - 1);
+    g_app_params.gpio_swd[sizeof(g_app_params.gpio_swd) - 1] = 0;
+
+    /* 回填 UI 控件（与配置保持一致的显示） */
     ui_update_interface_dropdown(g_app_params.interface - '0');
-
-    read_param = NULL;
-    err = storage_alloc_and_read(OOCD_RTOS_TYPE_KEY, &read_param);
-    if (err != ESP_OK || !read_param) {
-        g_app_params.rtos_type = CONFIG_ESP_RTOS;
-    } else {
-        g_app_params.rtos_type = read_param;
-    }
-
-    read_param = NULL;
-    err = storage_alloc_and_read(OOCD_CMD_LINE_ARGS_KEY, &read_param);
-    if (err != ESP_OK || !read_param) {
-        if (!is_espressif_target(g_app_params.config_file)) {
-            g_app_params.command_arg = CONFIG_OPENOCD_CUSTOM_COMMAND;
-        } else {
-            g_app_params.command_arg = "";
-        }
-    } else {
-        g_app_params.command_arg = read_param;
-    }
-
-    read_param = NULL;
-    err = storage_alloc_and_read(OOCD_FLASH_SUPPORT_KEY, &read_param);
-    if (err != ESP_OK || !read_param) {
-        g_app_params.flash_size = CONFIG_ESP_FLASH_SIZE;
-    } else {
-        g_app_params.flash_size = read_param;
-    }
-    if (!strcmp(g_app_params.flash_size, "0")) {
-        ui_update_flash_checkbox(false);
-    } else {
-        ui_update_flash_checkbox(true);
-    }
-
-    err = storage_read(OOCD_DUAL_CORE_KEY, &g_app_params.dual_core, 1);
-    if (err != ESP_OK) {
-        g_app_params.dual_core = CONFIG_ESP_ONLYCPU + '0';
-    }
-    if (g_app_params.dual_core == '1') {
-        ui_update_dual_core_checkbox(false);
-    } else {
-        ui_update_dual_core_checkbox(true);
-    }
-
-    err = storage_read(OOCD_DBG_LEVEL_KEY, &g_app_params.debug_level, 1);
-    if (err != ESP_OK) {
-        g_app_params.debug_level = CONFIG_OPENOCD_DEBUG_LEVEL + '0';
-    }
+    ui_update_flash_checkbox(strcmp(g_app_params.flash_size, "0") != 0);
+    ui_update_dual_core_checkbox(g_app_params.dual_core != '1');
     ui_update_debug_level_dropdown(g_app_params.debug_level - '0' - 1);
-
-    /* esp_gpio 引脚配置（网页可改，缺省 = cfg 内置值） */
-    read_param = NULL;
-    err = storage_alloc_and_read(OOCD_GPIO_JTAG_KEY, &read_param);
-    if (err == ESP_OK && read_param && strlen(read_param)) {
-        strncpy(g_app_params.gpio_jtag, read_param, sizeof(g_app_params.gpio_jtag) - 1);
-        g_app_params.gpio_jtag[sizeof(g_app_params.gpio_jtag) - 1] = 0;
-    } else {
-        strcpy(g_app_params.gpio_jtag, "38 39 40 41");
-    }
-    free(read_param);
-
-    read_param = NULL;
-    err = storage_alloc_and_read(OOCD_GPIO_SWD_KEY, &read_param);
-    if (err == ESP_OK && read_param && strlen(read_param)) {
-        strncpy(g_app_params.gpio_swd, read_param, sizeof(g_app_params.gpio_swd) - 1);
-        g_app_params.gpio_swd[sizeof(g_app_params.gpio_swd) - 1] = 0;
-    } else {
-        strcpy(g_app_params.gpio_swd, "38 39");
-    }
-    free(read_param);
 
     ESP_LOGI(TAG, "config file (%s)", g_app_params.config_file);
     ESP_LOGI(TAG, "rtos type (%s)", g_app_params.rtos_type);
@@ -237,6 +187,7 @@ void load_openocd_params(void)
     ESP_LOGI(TAG, "command arg (%s)", g_app_params.command_arg);
     ESP_LOGI(TAG, "debug_level (%c)", g_app_params.debug_level);
     ESP_LOGI(TAG, "gpio jtag (%s) swd (%s)", g_app_params.gpio_jtag, g_app_params.gpio_swd);
+    ESP_LOGI(TAG, "rtt poll (%d ms)", c->rtt_poll_ms);
 }
 
 /*
@@ -246,12 +197,14 @@ void load_openocd_params(void)
 */
 void load_network_params(void)
 {
-    size_t ssid_len = storage_get_value_length(WIFI_SSID_KEY);
+    /* WiFi 凭据也来自统一配置。空串 = 还没配过，
+     * 保持升级前的行为：回落到 menuconfig 值，或进 AP 配网模式。 */
+    const app_config_t *c = app_config_get();
 
-    ESP_LOGI(TAG, "ssid_len:%d", ssid_len);
+    ESP_LOGI(TAG, "ssid_len:%d", (int)strlen(c->wifi_ssid));
 
-    if (ssid_len == 0) {
-        ESP_LOGW(TAG, "Failed to get WiFi SSID len from nvs.");
+    if (strlen(c->wifi_ssid) == 0) {
+        ESP_LOGW(TAG, "No WiFi credentials in config.");
         if (!strcmp(CONFIG_ESP_WIFI_SSID, WIFI_AP_SSSID)) {
             ESP_LOGW(TAG, "Default values read from menuconfig. AP mode will be activated!");
             g_app_params.mode = APP_MODE_AP;
@@ -265,20 +218,10 @@ void load_network_params(void)
         }
     } else {
         g_app_params.mode = APP_MODE_STA;
-        esp_err_t err = storage_read(WIFI_SSID_KEY, g_app_params.wifi_ssid, ssid_len);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "Failed to read WiFi ssid");
-        } else {
-            size_t pass_len = storage_get_value_length(WIFI_PASS_KEY);
-            if (pass_len == 0) {
-                ESP_LOGW(TAG, "Failed to get WiFi password len");
-            } else {
-                err = storage_read(WIFI_PASS_KEY, g_app_params.wifi_pass, pass_len);
-                if (err != ESP_OK) {
-                    ESP_LOGW(TAG, "Failed to read WiFi password");
-                }
-            }
-        }
+        strncpy(g_app_params.wifi_ssid, c->wifi_ssid, sizeof(g_app_params.wifi_ssid) - 1);
+        g_app_params.wifi_ssid[sizeof(g_app_params.wifi_ssid) - 1] = 0;
+        strncpy(g_app_params.wifi_pass, c->wifi_pass, sizeof(g_app_params.wifi_pass) - 1);
+        g_app_params.wifi_pass[sizeof(g_app_params.wifi_pass) - 1] = 0;
     }
 
     if (g_app_params.mode == APP_MODE_AP) {
@@ -305,6 +248,11 @@ void init_idf_components(void)
 void app_main(void)
 {
     init_idf_components();
+
+    /* 统一配置必须最先加载：下面的 UI / OpenOCD / WiFi / 串口桥都从它取值。
+     * 读不到 JSON 时（首次升级）会从老的散装 NVS 键迁移一份并落盘。 */
+    app_config_load();
+
     ui_init();
     load_openocd_params();
     load_network_params();
@@ -342,8 +290,16 @@ void app_main(void)
 
         if (!strcmp(config.adapter_name, "wifiprov")) {
             network_get_sta_credentials(g_app_params.wifi_ssid, g_app_params.wifi_pass);
-            storage_write(WIFI_SSID_KEY, g_app_params.wifi_ssid, strlen(g_app_params.wifi_ssid));
-            storage_write(WIFI_PASS_KEY, g_app_params.wifi_pass, strlen(g_app_params.wifi_pass));
+
+            /* 配网拿到的凭据写进统一配置（原来的两个散键不再写） */
+            app_config_t *cc = app_config_mutable();
+            strncpy(cc->wifi_ssid, g_app_params.wifi_ssid, sizeof(cc->wifi_ssid) - 1);
+            cc->wifi_ssid[sizeof(cc->wifi_ssid) - 1] = 0;
+            strncpy(cc->wifi_pass, g_app_params.wifi_pass, sizeof(cc->wifi_pass) - 1);
+            cc->wifi_pass[sizeof(cc->wifi_pass) - 1] = 0;
+            if (app_config_save() != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to persist WiFi credentials");
+            }
 
             ui_show_info_screen("Wifi credentials have been changed. Restarting in 2 seconds...");
             vTaskDelay(2000 / portTICK_PERIOD_MS);

@@ -11,6 +11,7 @@
 #include "mdns.h"
 
 #include "network_mngr.h"
+#include "app_config.h"
 #include "ui.h"
 #include "storage.h"
 
@@ -101,17 +102,11 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
     case WIFI_EVENT_AP_START:
         ESP_LOGI(TAG, "%s:%d WIFI_EVENT_START", __func__, __LINE__);
         xEventGroupSetBits(s_event_group, WIFI_STARTED_BIT);
-        /* 应用网页配置的省电模式：storage "ps" = '1' 省电 / '0' RF 常开。
+        /* 应用统一配置里的省电模式：power_save = true 省电 / false RF 常开。
          * 缺省 = 省电开：默认低温低功耗（空闲省 ~60-80mA）；但省电会让高频
          * 小包流 RTT 出现 ~400ms 黑洞（burst_test 实测），示波器/调试场景需
          * 在网页 Wi-Fi 设置里手动关闭省电换取低延迟。 */
-        {
-            char psv = '1';
-            if (storage_is_key_exist(WIFI_PS_KEY)) {
-                storage_read(WIFI_PS_KEY, &psv, 1);
-            }
-            network_mngr_set_power_save(psv == '1');
-        }
+        network_mngr_set_power_save(app_config_get()->wifi_power_save);
         break;
     case WIFI_EVENT_STA_STOP:
     case WIFI_EVENT_AP_STOP:

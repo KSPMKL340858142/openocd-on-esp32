@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <errno.h>
 #include <sys/stat.h>
 #include <sys/unistd.h>
 
@@ -12,6 +13,7 @@
 #include <cJSON.h>
 
 #include "web_server.h"
+#include "app_config.h"
 #include "storage.h"
 #include "ui.h"
 #include "types.h"
@@ -23,6 +25,19 @@
 #endif
 
 static const char *TAG = "web-server";
+
+/* 复制一个来自表单的字符串到配置字段。
+ * 容量不够时返回 false，由调用方回 400——静默截断在 WiFi 密码上会变成
+ * 「保存成功了但连不上」，最难查。 */
+static bool copy_field(char *dst, size_t cap, const char *src)
+{
+    if (!src || strlen(src) >= cap) {
+        return false;
+    }
+
+    snprintf(dst, cap, "%s", src);
+    return true;
+}
 
 esp_err_t website_handler(httpd_req_t *req)
 {
@@ -89,17 +104,29 @@ esp_err_t set_credentials_handler(httpd_req_t *req)
 
     cJSON *ssid = cJSON_GetObjectItem(root, "ssid");
     cJSON *pass = cJSON_GetObjectItem(root, "pass");
-    if (!pass || !ssid || !ssid->valuestring) {
+    /* pass 也要判 valuestring：空密码（开放网络）时前端可能只发 key 不发值，
+     * 只判 !pass 会让下面 strlen(NULL) 直接崩。 */
+    if (!pass || !ssid || !ssid->valuestring || !pass->valuestring) {
         cJSON_Delete(root);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Json parse error");
         return ESP_FAIL;
     }
 
-    httpd_resp_sendstr(req, "Wi-Fi 设置已保存，设备将自动重启。");
-
-    storage_write(WIFI_SSID_KEY, ssid->valuestring, strlen(ssid->valuestring));
-    storage_write(WIFI_PASS_KEY, pass->valuestring, strlen(pass->valuestring));
+    app_config_t *cfg = app_config_mutable();
+    if (!copy_field(cfg->wifi_ssid, sizeof(cfg->wifi_ssid), ssid->valuestring) ||
+        !copy_field(cfg->wifi_pass, sizeof(cfg->wifi_pass), pass->valuestring)) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "SSID 或密码超过长度上限");
+        return ESP_FAIL;
+    }
     cJSON_Delete(root);
+
+    if (app_config_save() != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "config save failed");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_sendstr(req, "Wi-Fi 设置已保存，设备将自动重启。");
 
     ui_show_info_screen("Wifi credentials have been changed. Restarting in 2 seconds...");
     vTaskDelay(2000 / portTICK_PERIOD_MS);
@@ -134,26 +161,29 @@ esp_err_t set_openocd_config_handler(httpd_req_t *req)
     ESP_LOGI(TAG, "Flash: %s", flash->type == cJSON_True ? "true" : "false");
     ESP_LOGI(TAG, "C Param: %s", cParam->valuestring);
 
-    storage_write(OOCD_CFG_FILE_KEY, target->valuestring, strlen(target->valuestring));
-    storage_write(OOCD_CMD_LINE_ARGS_KEY, cParam->valuestring, strlen(cParam->valuestring));
-    storage_write(OOCD_RTOS_TYPE_KEY, rtos->valuestring, strlen(rtos->valuestring));
-    storage_write(OOCD_INTERFACE_KEY, interface->valuestring, 1);
-    storage_write(OOCD_DBG_LEVEL_KEY, debug->valuestring, 1);
+    app_config_t *cfg = app_config_mutable();
 
-    if (dualCore->type == cJSON_True) {
-        storage_write(OOCD_DUAL_CORE_KEY, "3", 1);
-    } else {
-        storage_write(OOCD_DUAL_CORE_KEY, "1", 1);
+    if (!copy_field(cfg->target, sizeof(cfg->target), target->valuestring) ||
+        !copy_field(cfg->rtos, sizeof(cfg->rtos), rtos->valuestring) ||
+        !copy_field(cfg->extra_command, sizeof(cfg->extra_command), cParam->valuestring)) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "target / rtos / cParam 超过长度上限");
+        return ESP_FAIL;
     }
 
-    if (flash->type == cJSON_True) {
-        storage_write(OOCD_FLASH_SUPPORT_KEY, "auto", 4);
-    } else {
-        storage_write(OOCD_FLASH_SUPPORT_KEY, "0", 1);
-    }
+    cfg->iface = (interface->valuestring[0] == '0') ? '0' : '1';
+    cfg->debug_level = debug->valuestring[0];
+    cfg->dual_core = (dualCore->type == cJSON_True) ? '3' : '1';
+    copy_field(cfg->flash_size, sizeof(cfg->flash_size),
+               (flash->type == cJSON_True) ? "auto" : "0");
 
     // Cleanup
     cJSON_Delete(root);
+
+    if (app_config_save() != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "config save failed");
+        return ESP_FAIL;
+    }
 
     httpd_resp_sendstr(req, "调试配置已保存，设备将自动重启。");
 
@@ -183,6 +213,24 @@ esp_err_t get_openocd_config_handler(httpd_req_t *req)
     cJSON_AddItemToObject(json_object, "configList", config_list);
     cJSON_AddItemToObject(json_object, "rtosList", rtos_list);
 
+    /* 当前生效值。
+     * 只回列表的话，网页上这些控件显示的是 HTML 里写死的默认值
+     * （debug=2、dual-core/flash 默认勾选、interface 默认 jtag），
+     * 跟程序实际在用的配置对不上，改配置时很容易误判。 */
+    const app_config_t *c = app_config_get();
+    cJSON *cur = cJSON_CreateObject();
+    if (cur) {
+        char dbg[2] = { c->debug_level, 0 };
+        cJSON_AddStringToObject(cur, "target", c->target);
+        cJSON_AddStringToObject(cur, "interface", c->iface == '0' ? "0" : "1");
+        cJSON_AddStringToObject(cur, "rtos", c->rtos);
+        cJSON_AddStringToObject(cur, "debug", dbg);
+        cJSON_AddBoolToObject(cur, "dualCore", c->dual_core == '3');
+        cJSON_AddBoolToObject(cur, "flash", strcmp(c->flash_size, "0") != 0);
+        cJSON_AddStringToObject(cur, "cParam", c->extra_command);
+        cJSON_AddItemToObject(json_object, "current", cur);
+    }
+
     // Convert the JSON object to a string
     char *json_string = cJSON_PrintUnformatted(json_object);
 
@@ -197,22 +245,37 @@ esp_err_t get_openocd_config_handler(httpd_req_t *req)
     return err;
 }
 
-static void get_filename_from_path(const char *path, char *filename)
+/* 取 URI 最后一段作为文件名。
+ * 必须带容量：原来是无脑 strcpy 到 64 字节的栈数组，
+ * 而 httpd 的 URI 上限是 512 字节，构造一个超长名字就能写穿栈。
+ * 只取最后一段也顺带免疫了 ../ 路径穿越。 */
+static void get_filename_from_path(const char *path, char *filename, size_t cap)
 {
     const char *last_slash = strrchr(path, '/');
-    if (last_slash) {
-        strcpy(filename, last_slash + 1);
-    } else {
-        strcpy(filename, path);
+    const char *src = last_slash ? last_slash + 1 : path;
+    size_t n = strlen(src);
+
+    if (n >= cap) {
+        n = cap - 1;
     }
+
+    memcpy(filename, src, n);
+    filename[n] = 0;
 }
 
 static esp_err_t file_upload_handler(httpd_req_t *req)
 {
     struct stat file_stat;
-    char filepath[128] = CFG_FILE_PATH;
+    char filename[64] = {0};
+    char filepath[128] = {0};
 
-    get_filename_from_path(req->uri, filepath + strlen(CFG_FILE_PATH));
+    get_filename_from_path(req->uri, filename, sizeof(filename));
+    if (filename[0] == 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "缺少文件名");
+        return ESP_FAIL;
+    }
+
+    snprintf(filepath, sizeof(filepath), "%s%s", CFG_FILE_PATH, filename);
 
     if (stat(filepath, &file_stat) == 0) {
         ESP_LOGE(TAG, "File already exists : %s", filepath);
@@ -296,10 +359,17 @@ static esp_err_t file_delete_handler(httpd_req_t *req)
     char filepath[128] = {0};
     char filename[64] = {0};
 
-    get_filename_from_path(req->uri, filename);
+    get_filename_from_path(req->uri, filename, sizeof(filename));
 
-    strcpy(filepath, CFG_FILE_PATH);
-    strcat(filepath, filename);
+    /* 空名字会让 filepath 变成目录本身（/data/target/）：
+     * stat() 对已存在的目录返回成功，接着 unlink() 必然失败却不检查，
+     * 最后还回一句「删除成功」——纯误导。 */
+    if (filename[0] == 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "缺少文件名");
+        return ESP_FAIL;
+    }
+
+    snprintf(filepath, sizeof(filepath), "%s%s", CFG_FILE_PATH, filename);
 
     ESP_LOGI(TAG, "filepath:%s", filepath);
 
@@ -312,9 +382,38 @@ static esp_err_t file_delete_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    unlink(filepath);
+    /* 原来不检查返回值：对目录、只读等失败情形都会照样回「删除成功」 */
+    if (unlink(filepath) != 0) {
+        ESP_LOGE(TAG, "unlink failed (%s): %s", strerror(errno), filepath);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "删除失败");
+        return ESP_FAIL;
+    }
 
-    storage_update_target_struct();
+    /* 删掉的如果正是当前在用的 target，必须把配置改指向剩下的某个文件。
+     * 否则配置里留着一条指向已删文件的悬挂引用，重启后 run_openocd()
+     * 去加载 target/xxx.cfg 直接失败，OpenOCD 起不来。 */
+    bool was_current = (strcmp(app_config_get()->target, filename) == 0);
+
+    if (storage_update_target_struct() != ESP_OK) {
+        ESP_LOGW(TAG, "target list refresh failed");
+    }
+
+    if (was_current) {
+        app_config_t *c = app_config_mutable();
+
+        if (g_app_params.target_list && g_app_params.target_count > 0) {
+            snprintf(c->target, sizeof(c->target), "%s", g_app_params.target_list[0]);
+            ESP_LOGW(TAG, "current target deleted, switched to %s", c->target);
+        } else {
+            /* 一个都不剩：留空。启动时会明确报 target 不可用，比指向幽灵文件好查 */
+            c->target[0] = 0;
+            ESP_LOGW(TAG, "no target cfg left after deletion");
+        }
+
+        if (app_config_save() != ESP_OK) {
+            ESP_LOGE(TAG, "failed to persist target change");
+        }
+    }
 
     // Send the response indicating success
     httpd_resp_sendstr(req, "文件删除成功。");
@@ -416,11 +515,7 @@ static esp_err_t set_serial_config_handler(httpd_req_t *req)
  *                  POST /wifi_config body {"ps":bool} -> 存储 + 热应用 */
 static bool wifi_ps_current(void)
 {
-    char v = '1';                        /* 缺省 = 省电开（低温低功耗） */
-    if (storage_is_key_exist(WIFI_PS_KEY)) {
-        storage_read(WIFI_PS_KEY, &v, 1);
-    }
-    return v == '1';
+    return app_config_get()->wifi_power_save;   /* 缺省 = 省电开（低温低功耗） */
 }
 
 static esp_err_t get_wifi_config_handler(httpd_req_t *req)
@@ -448,9 +543,9 @@ static esp_err_t set_wifi_config_handler(httpd_req_t *req)
     bool on = (ps && cJSON_IsTrue(ps)) ? true : false;
     cJSON_Delete(root);
 
-    char v = on ? '1' : '0';
-    if (storage_write(WIFI_PS_KEY, &v, 1) != ESP_OK) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "storage write failed");
+    app_config_mutable()->wifi_power_save = on;
+    if (app_config_save() != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "config save failed");
         return ESP_FAIL;
     }
     network_mngr_set_power_save(on);       /* 热应用，无需重启 */
@@ -473,17 +568,19 @@ static bool oocd_gpio_reserved(int gpio)
     return false;
 }
 
-/* 从 storage 读引脚文本，解析到 out（cnt 个），失败/缺省用 def */
-static void oocd_gpio_read(const char *key, int *out, int cnt, const int *def)
+/* 把配置里的引脚文本（"38 39"）解析到 out（cnt 个），空/缺省用 def。
+ * 原先是直接从 NVS 读，现在文本来自 app_config；strtok 会改缓冲区，
+ * 所以先拷一份。 */
+static void oocd_gpio_parse(const char *text, int *out, int cnt, const int *def)
 {
-    char buf[32] = {0};
-    if (storage_is_key_exist(key)) {
-        storage_read(key, buf, sizeof(buf) - 1);
-    }
-    if (!strlen(buf)) {
+    if (!text || !strlen(text)) {
         for (int i = 0; i < cnt; i++) out[i] = def[i];
         return;
     }
+
+    char buf[32] = {0};
+    snprintf(buf, sizeof(buf), "%s", text);
+
     int idx = 0;
     char *save = NULL;
     for (char *tok = strtok_r(buf, " ", &save); tok && idx < cnt; tok = strtok_r(NULL, " ", &save)) {
@@ -498,8 +595,9 @@ static esp_err_t get_openocd_gpio_handler(httpd_req_t *req)
     int jtag[4], swd[2];
     const int jtag_def[4] = {38, 39, 40, 41};
     const int swd_def[2] = {38, 39};
-    oocd_gpio_read(OOCD_GPIO_JTAG_KEY, jtag, 4, jtag_def);
-    oocd_gpio_read(OOCD_GPIO_SWD_KEY, swd, 2, swd_def);
+    const app_config_t *cfg = app_config_get();
+    oocd_gpio_parse(cfg->gpio_jtag, jtag, 4, jtag_def);
+    oocd_gpio_parse(cfg->gpio_swd, swd, 2, swd_def);
 
     cJSON *root = cJSON_CreateObject();
     cJSON *j = cJSON_CreateIntArray(jtag, 4);
@@ -553,17 +651,16 @@ static esp_err_t set_openocd_gpio_handler(httpd_req_t *req)
         }
     }
 
-    char val[32];
-    snprintf(val, sizeof(val), "%d %d %d %d",
+    app_config_t *cfg = app_config_mutable();
+    snprintf(cfg->gpio_jtag, sizeof(cfg->gpio_jtag), "%d %d %d %d",
              cJSON_GetArrayItem(jtag, 0)->valueint, cJSON_GetArrayItem(jtag, 1)->valueint,
              cJSON_GetArrayItem(jtag, 2)->valueint, cJSON_GetArrayItem(jtag, 3)->valueint);
-    esp_err_t e1 = storage_write(OOCD_GPIO_JTAG_KEY, val, strlen(val));
-    snprintf(val, sizeof(val), "%d %d",
+    snprintf(cfg->gpio_swd, sizeof(cfg->gpio_swd), "%d %d",
              cJSON_GetArrayItem(swd, 0)->valueint, cJSON_GetArrayItem(swd, 1)->valueint);
-    esp_err_t e2 = storage_write(OOCD_GPIO_SWD_KEY, val, strlen(val));
     cJSON_Delete(root);
-    if (e1 != ESP_OK || e2 != ESP_OK) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "storage write failed");
+
+    if (app_config_save() != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "config save failed");
         return ESP_FAIL;
     }
 
@@ -573,6 +670,99 @@ static esp_err_t set_openocd_gpio_handler(httpd_req_t *req)
     esp_restart();
     return ESP_OK;
 }
+
+/* ------------------------------------------------------------------ */
+/* 统一配置文件的导入导出。
+ *
+ * 只做「下载 / 上传」两个动作，网页本身不做文本编辑器——在电脑上用任意
+ * 文本编辑器改这份 JSON，改完传回来即可。
+ *
+ *   下载：浏览器访问 http://esp32-ocd.local/config.json
+ *   上传：curl -X POST --data-binary @config.json http://esp32-ocd.local/config.json
+ */
+
+static esp_err_t get_config_file_handler(httpd_req_t *req)
+{
+    char *json = app_config_to_json(true);      /* 带缩进，便于人读和手改 */
+    if (!json) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    /* 让浏览器当附件下载，而不是在页面里展开 */
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"config.json\"");
+
+    esp_err_t err = httpd_resp_sendstr(req, json);
+    free(json);
+    return err;
+}
+
+static esp_err_t set_config_file_handler(httpd_req_t *req)
+{
+    /* content_len 是 size_t，别写 <= 0（会触发无符号比较恒假的警告） */
+    if (req->content_len == 0 || req->content_len > APP_CFG_JSON_MAX) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "config json missing or too large");
+        return ESP_FAIL;
+    }
+
+    /* 一次性读完：整份配置约 1 KB，分块拼反而容易出错 */
+    char *body = calloc(1, req->content_len + 1);
+    if (!body) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
+        return ESP_FAIL;
+    }
+
+    size_t got = 0;
+    while (got < (size_t)req->content_len) {
+        int r = httpd_req_recv(req, body + got, req->content_len - got);
+        if (r <= 0) {
+            if (r == HTTPD_SOCK_ERR_TIMEOUT) {
+                continue;
+            }
+            free(body);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "recv failed");
+            return ESP_FAIL;
+        }
+        got += (size_t)r;
+    }
+
+    char err[96] = {0};
+    esp_err_t e = app_config_from_json(body, err, sizeof(err));
+    free(body);
+
+    if (e != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, err);
+        return ESP_FAIL;
+    }
+
+    if (app_config_save() != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "config save failed");
+        return ESP_FAIL;
+    }
+
+    /* 回完响应就重启：整份配置已经换掉，但运行态（g_app_params / OpenOCD /
+     * WiFi）还是旧的。不重启的话网页读出来是新值、设备跑的是老值，
+     * 正好又变成「显示与实际不一致」。必须先 sendstr 再重启，否则前端收不到 200。 */
+    httpd_resp_sendstr(req, "配置已导入，设备将在 2 秒后重启并应用。");
+    vTaskDelay(2000 / portTICK_PERIOD_MS);
+    esp_restart();
+    return ESP_OK;
+}
+
+httpd_uri_t uri_get_config_file = {
+    .uri       = "/config.json",
+    .method    = HTTP_GET,
+    .handler   = get_config_file_handler,
+    .user_ctx  = NULL
+};
+
+httpd_uri_t uri_set_config_file = {
+    .uri       = "/config.json",
+    .method    = HTTP_POST,
+    .handler   = set_config_file_handler,
+    .user_ctx  = NULL
+};
 
 httpd_uri_t uri_get_main_page = {
     .uri = "/",
@@ -678,7 +868,12 @@ esp_err_t web_server_start(httpd_handle_t *http_handle)
     /* Running web server on other core to get better response time */
     config.core_id = 1;
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_uri_handlers = 16;
+    /* 目前注册 16 个；留点余量，否则以后加端点会静默注册失败 */
+    config.max_uri_handlers = 20;
+    /* 默认 4096 不够宽裕：/config.json 上传时栈上要放 app_config_t(~500 B)
+     * + 错误缓冲，还要叠加 cJSON 解析帧；现有 handler 里还有按 content_len
+     * 开 VLA 的写法。提到 8 KB 换掉这类偶发栈溢出。 */
+    config.stack_size = 8192;
 
     ESP_LOGI(TAG, "Starting HTTP Server on port: '%d'", config.server_port);
     if (httpd_start(http_handle, &config) != ESP_OK) {
@@ -700,6 +895,8 @@ esp_err_t web_server_start(httpd_handle_t *http_handle)
     httpd_register_uri_handler(*http_handle, &uri_set_wifi_config);
     httpd_register_uri_handler(*http_handle, &uri_get_openocd_gpio);
     httpd_register_uri_handler(*http_handle, &uri_set_openocd_gpio);
+    httpd_register_uri_handler(*http_handle, &uri_get_config_file);
+    httpd_register_uri_handler(*http_handle, &uri_set_config_file);
 
     return ESP_OK;
 }
