@@ -29,6 +29,7 @@ set(dependencies
     wifi_provisioning
     json
     esp_timer
+    espressif__mdns
 )
 
 idf_component_register(

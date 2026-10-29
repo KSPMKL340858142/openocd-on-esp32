@@ -5,5 +5,7 @@ dependencies:
     version: "1.4.0"
   espressif/esp-box:
     version: "^2.2.0"
+  espressif/mdns:
+    version: "^1.14.0"
   idf:
     version: ">=5.0.0"

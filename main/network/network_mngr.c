@@ -8,6 +8,7 @@
 #include "esp_event.h"
 #include "esp_mac.h"
 #include "wifi_provisioning/scheme_softap.h"
+#include "mdns.h"
 
 #include "network_mngr.h"
 #include "ui.h"
@@ -131,6 +132,30 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
     }
 }
 
+/* mDNS：主机用 esp32-ocd.local 访问本机，DHCP 换了 IP 也不用改 launch.json */
+#define MDNS_HOSTNAME "esp32-ocd"
+
+static void mdns_start_once(void)
+{
+    static bool started;
+    if (started) {
+        return;
+    }
+
+    esp_err_t err = mdns_init();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "mdns_init failed (%s)", esp_err_to_name(err));
+        return;
+    }
+
+    mdns_hostname_set(MDNS_HOSTNAME);
+    mdns_instance_name_set("OpenOCD on ESP32-S3");
+    mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+
+    started = true;
+    ESP_LOGI(TAG, "mDNS ready: http://%s.local/", MDNS_HOSTNAME);
+}
+
 static void ip_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
     const wifi_event_t event_type = (wifi_event_t)(event_id);
@@ -142,6 +167,7 @@ static void ip_event_handler(void *arg, esp_event_base_t event_base, int32_t eve
         ESP_LOGI(TAG, "GOT ip event!!!");
         net_utils_print_ip_info(event_data, "Wifi Connect to the Access Point");
         xEventGroupSetBits(s_event_group, WIFI_CONNECTED_BIT);
+        mdns_start_once();
         ESP_LOGI(TAG, "%s:%d CONNECTED!", __func__, __LINE__);
         break;
     }
