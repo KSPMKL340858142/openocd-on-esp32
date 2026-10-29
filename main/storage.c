@@ -105,8 +105,14 @@ esp_err_t storage_read(const char *key, char *value, size_t len)
 
     nvs_close(my_handle);
 
-    if (esp_err == ESP_OK && n_bytes != len) {
-        ESP_LOGE(TAG, "Expected len (%d) actual len (%d)", len, n_bytes);
+    /* nvs_get_blob 的语义是「最多读 len 字节」：
+     *   n_bytes > len  → 缓冲区不够，真错误
+     *   n_bytes < len  → 正常（存的 blob 比缓冲区短），剩余字节保持调用方传入的原值
+     * 原先写成 != 会把「存储比缓冲区短」也判成失败，
+     * 导致 web_server 用固定 31 字节缓冲读变长字符串（如 "38 40" 只有 5 字节）时永远读不到。
+     */
+    if (esp_err == ESP_OK && n_bytes > len) {
+        ESP_LOGE(TAG, "Buffer too small: need (%u) got (%u)", (unsigned)n_bytes, (unsigned)len);
         return ESP_FAIL;
     }
 
